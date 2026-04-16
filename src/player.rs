@@ -1,27 +1,103 @@
 use bevy::prelude::*;
-use crate::camera::ThirdPersonCamera;
+use bevy_third_person_camera::{ThirdPersonCamera, ThirdPersonCameraTarget};
+use crate::db;
+use crate::inventory::{Hotbar, Inventory, ItemRegistry, Spell, SpellBook};
 
 pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_player)
-            .add_systems(Update, move_player);
+        app.add_systems(Startup, (seed_item_registry, spawn_player).chain())
+            .add_systems(Update, (move_player, apply_jump));
     }
 }
 
 #[derive(Component)]
 pub struct Player;
 
+/// Simple vertical physics — no full physics engine needed for basic jump.
+#[derive(Component)]
+pub struct Jumper {
+    pub velocity_y: f32,
+    /// Initial upward velocity when jumping.
+    pub jump_force: f32,
+    /// Gravity acceleration (positive = downward).
+    pub gravity: f32,
+    /// Y position of the ground surface (player rests here).
+    pub ground_y: f32,
+}
+
+impl Default for Jumper {
+    fn default() -> Self {
+        Self {
+            velocity_y: 0.0,
+            jump_force: 7.0,
+            gravity: 20.0,
+            ground_y: 1.0,
+        }
+    }
+}
+
 const SPEED: f32 = 5.0;
+
+// ── Startup systems ───────────────────────────────────────────────────────────
+
+fn seed_item_registry(mut registry: ResMut<ItemRegistry>) {
+    let conn = match db::open() {
+        Ok(c) => c,
+        Err(e) => { error!("DB open failed: {e}"); return; }
+    };
+    if let Err(e) = db::init(&conn) {
+        error!("DB init failed: {e}"); return;
+    }
+    match db::load_items(&conn) {
+        Ok(rows) => {
+            for (id, name, r, g, b) in rows {
+                registry.register(id, name, Color::srgb(r, g, b));
+            }
+        }
+        Err(e) => error!("Failed to load items: {e}"),
+    }
+}
 
 fn spawn_player(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    // Load spells from DB; fall back to empty if unavailable.
+    let spells: Vec<Spell> = db::open()
+        .and_then(|conn| db::load_spells(&conn))
+        .map(|rows| {
+            rows.into_iter()
+                .map(|(name, key_str, cooldown_secs, r, g, b)| Spell {
+                    name,
+                    key: db::key_code_from_str(&key_str),
+                    cooldown_secs,
+                    remaining_cooldown: 0.0,
+                    color: Color::srgb(r, g, b),
+                })
+                .collect()
+        })
+        .unwrap_or_else(|e| { error!("Failed to load spells: {e}"); vec![] });
+
+    let mut inventory = Inventory::default();
+    inventory.add(1, 1); // Iron Sword
+    inventory.add(2, 5); // Health Potion
+    inventory.add(3, 3); // Mana Potion
+
+    let mut hotbar = Hotbar::default();
+    hotbar.bindings[0] = Some(0);
+    hotbar.bindings[1] = Some(1);
+    hotbar.bindings[2] = Some(2);
+
     commands.spawn((
         Player,
+        ThirdPersonCameraTarget,
+        Jumper::default(),
+        inventory,
+        hotbar,
+        SpellBook { spells },
         Mesh3d(meshes.add(Capsule3d::new(0.5, 1.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.8, 0.2, 0.2),
@@ -31,45 +107,56 @@ fn spawn_player(
     ));
 }
 
+// ── Update systems ────────────────────────────────────────────────────────────
+
 fn move_player(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     camera_query: Query<&Transform, (With<ThirdPersonCamera>, Without<Player>)>,
     mut player_query: Query<&mut Transform, With<Player>>,
 ) {
-    let Ok(cam_transform) = camera_query.single() else {
-        return;
-    };
-    let Ok(mut player_transform) = player_query.single_mut() else {
-        return;
-    };
+    let Ok(cam_transform) = camera_query.single() else { return };
+    let Ok(mut player_transform) = player_query.single_mut() else { return };
 
-    // Project camera axes onto the XZ plane for movement
     let cam_fwd = cam_transform.forward();
     let cam_right = cam_transform.right();
     let forward = Vec3::new(cam_fwd.x, 0.0, cam_fwd.z).normalize_or_zero();
     let right = Vec3::new(cam_right.x, 0.0, cam_right.z).normalize_or_zero();
 
     let mut direction = Vec3::ZERO;
-    if keys.pressed(KeyCode::KeyW) {
-        direction += forward;
-    }
-    if keys.pressed(KeyCode::KeyS) {
-        direction -= forward;
-    }
-    if keys.pressed(KeyCode::KeyA) {
-        direction -= right;
-    }
-    if keys.pressed(KeyCode::KeyD) {
-        direction += right;
-    }
+    if keys.pressed(KeyCode::KeyW) { direction += forward; }
+    if keys.pressed(KeyCode::KeyS) { direction -= forward; }
+    if keys.pressed(KeyCode::KeyA) { direction -= right; }
+    if keys.pressed(KeyCode::KeyD) { direction += right; }
 
     if direction.length_squared() > 0.0 {
         direction = direction.normalize();
         player_transform.translation += direction * SPEED * time.delta_secs();
-
-        // Rotate player to face movement direction
         let target = player_transform.translation + direction;
         player_transform.look_at(target, Vec3::Y);
+    }
+}
+
+fn apply_jump(
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    mut query: Query<(&mut Transform, &mut Jumper), With<Player>>,
+) {
+    let Ok((mut transform, mut jumper)) = query.single_mut() else { return };
+    let dt = time.delta_secs();
+
+    let grounded = transform.translation.y <= jumper.ground_y + f32::EPSILON;
+
+    if keys.just_pressed(KeyCode::Space) && grounded {
+        jumper.velocity_y = jumper.jump_force;
+    }
+
+    jumper.velocity_y -= jumper.gravity * dt;
+    transform.translation.y += jumper.velocity_y * dt;
+
+    // Clamp to ground and stop falling.
+    if transform.translation.y < jumper.ground_y {
+        transform.translation.y = jumper.ground_y;
+        jumper.velocity_y = 0.0;
     }
 }

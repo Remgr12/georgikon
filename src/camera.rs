@@ -1,111 +1,62 @@
-use bevy::{
-    input::mouse::AccumulatedMouseMotion,
-    prelude::*,
-    window::{CursorGrabMode, CursorOptions, PrimaryWindow},
-};
 use crate::player::Player;
+use bevy::input::mouse::MouseMotion;
+use bevy::prelude::*;
+use bevy_third_person_camera::{CameraSyncSet, Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, Zoom};
 
 pub struct CameraPlugin;
 
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (spawn_camera, lock_cursor))
-            .add_systems(Update, (orbit_camera, toggle_cursor_lock));
-    }
-}
-
-/// Spherical-coordinate orbit camera that follows the player.
-#[derive(Component)]
-pub struct ThirdPersonCamera {
-    /// Horizontal angle around the player (radians).
-    pub yaw: f32,
-    /// Vertical angle above the player (radians). Clamped to avoid gimbal flip.
-    pub pitch: f32,
-    /// Distance from the follow target.
-    pub distance: f32,
-    pub mouse_sensitivity: f32,
-}
-
-impl Default for ThirdPersonCamera {
-    fn default() -> Self {
-        Self {
-            yaw: 0.0,
-            pitch: 0.35, // ~20° above horizon
-            distance: 8.0,
-            mouse_sensitivity: 0.003,
-        }
+        app.add_plugins(ThirdPersonCameraPlugin)
+            .add_systems(Startup, spawn_camera)
+            // Flip mouse Y before the library reads it in PreUpdate.
+            .add_systems(First, invert_mouse_y)
+            // Clamp camera above ground after the library finalises position.
+            .add_systems(PostUpdate, clamp_camera_to_ground.after(CameraSyncSet));
     }
 }
 
 fn spawn_camera(mut commands: Commands) {
     commands.spawn((
-        ThirdPersonCamera::default(),
+        ThirdPersonCamera {
+            zoom: Zoom::new(3.0, 12.0),
+            sensitivity: Vec2::new(2.5, 2.5),
+            cursor_lock_key: KeyCode::Tab, // Space is reserved for jump
+            offset_enabled: true,
+            offset: Offset::new(0.5, 0.25),
+            offset_toggle_enabled: true,
+            offset_toggle_key: KeyCode::KeyT,
+            offset_toggle_speed: 5.0,
+            ..default()
+        },
         Camera3d::default(),
-        Transform::from_xyz(0.0, 6.0, 8.0).looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
     ));
 }
 
-fn lock_cursor(mut cursor_query: Query<&mut CursorOptions, With<PrimaryWindow>>) {
-    let Ok(mut cursor) = cursor_query.single_mut() else {
-        return;
-    };
-    cursor.grab_mode = CursorGrabMode::Locked;
-    cursor.visible = false;
-}
-
-/// Press Escape to release / re-lock the cursor.
-fn toggle_cursor_lock(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut cursor_query: Query<&mut CursorOptions, With<PrimaryWindow>>,
-) {
-    if !keys.just_pressed(KeyCode::Escape) {
-        return;
-    }
-    let Ok(mut cursor) = cursor_query.single_mut() else {
-        return;
-    };
-    match cursor.grab_mode {
-        CursorGrabMode::Locked => {
-            cursor.grab_mode = CursorGrabMode::None;
-            cursor.visible = true;
-        }
-        _ => {
-            cursor.grab_mode = CursorGrabMode::Locked;
-            cursor.visible = false;
-        }
+/// Inverts the vertical mouse axis by mutating MouseMotion messages in place
+/// before the library's orbit system consumes them.
+fn invert_mouse_y(mut mouse: MessageMutator<MouseMotion>) {
+    for ev in mouse.read() {
+        ev.delta.y = -ev.delta.y;
     }
 }
 
-fn orbit_camera(
-    mouse_motion: Res<AccumulatedMouseMotion>,
-    mut camera_query: Query<(&mut ThirdPersonCamera, &mut Transform)>,
-    player_query: Query<&Transform, (With<Player>, Without<ThirdPersonCamera>)>,
+/// Prevents the camera from dipping below the ground plane by clamping its Y
+/// and re-aiming at the player when the clamp activates.
+fn clamp_camera_to_ground(
+    player_q: Query<&Transform, (With<Player>, Without<ThirdPersonCamera>)>,
+    mut cam_q: Query<&mut Transform, With<ThirdPersonCamera>>,
 ) {
-    let Ok(player_transform) = player_query.single() else {
+    let Ok(player) = player_q.single() else {
         return;
     };
-    let Ok((mut cam, mut cam_transform)) = camera_query.single_mut() else {
+    let Ok(mut cam) = cam_q.single_mut() else {
         return;
     };
 
-    // delta.x positive = mouse right → rotate camera right (yaw decreases)
-    cam.yaw -= mouse_motion.delta.x * cam.mouse_sensitivity;
-    // delta.y negative = mouse up → camera rises (pitch increases)
-    cam.pitch -= mouse_motion.delta.y * cam.mouse_sensitivity;
-
-    // Prevent the camera from flipping over the top or clipping under the ground
-    cam.pitch = cam.pitch.clamp(-0.15, 1.4);
-
-    // Convert spherical → Cartesian offset from the player
-    let offset = Vec3::new(
-        cam.yaw.sin() * cam.pitch.cos(),
-        cam.pitch.sin(),
-        cam.yaw.cos() * cam.pitch.cos(),
-    ) * cam.distance;
-
-    // Target the player's chest rather than their feet
-    let target = player_transform.translation + Vec3::Y * 1.0;
-
-    cam_transform.translation = target + offset;
-    cam_transform.look_at(target, Vec3::Y);
+    const MIN_CAM_Y: f32 = 0.1;
+    if cam.translation.y < MIN_CAM_Y {
+        cam.translation.y = MIN_CAM_Y;
+        cam.look_at(player.translation + Vec3::Y * 1.0, Vec3::Y);
+    }
 }
