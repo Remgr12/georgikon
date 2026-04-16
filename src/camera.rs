@@ -1,7 +1,9 @@
 use crate::player::Player;
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
-use bevy_third_person_camera::{CameraSyncSet, Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, Zoom};
+use bevy_third_person_camera::{
+    CameraSyncSet, Offset, ThirdPersonCamera, ThirdPersonCameraPlugin, Zoom,
+};
 
 pub struct CameraPlugin;
 
