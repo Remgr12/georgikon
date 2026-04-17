@@ -6,7 +6,10 @@ edition = "2024"
 [dependencies]
 bevy = "0.18.1"
 bevy_third_person_camera = "0.4.0"
+clap = { version = "4.6.1", features = ["derive"] }
+lightyear = { version = "0.26.4", features = ["netcode", "udp"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
+serde = { version = "1.0.228", features = ["derive"] }
 
 # Compile dependencies with optimizations in debug builds.
 # Without this Bevy runs at ~5 fps in dev; with it, near release speed.
