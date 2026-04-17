@@ -28,6 +28,16 @@ pub fn init(conn: &Connection) -> Result<()> {
             color_r      REAL    NOT NULL,
             color_g      REAL    NOT NULL,
             color_b      REAL    NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS guilds (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT    UNIQUE NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS guild_members (
+            guild_id     INTEGER NOT NULL,
+            player_id    INTEGER NOT NULL,
+            rank         TEXT    NOT NULL,
+            PRIMARY KEY (guild_id, player_id)
         );",
     )?;
 

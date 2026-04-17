@@ -1,7 +1,5 @@
 use bevy::prelude::*;
 use lightyear::prelude::*;
-use lightyear::prelude::client::*;
-use lightyear::prelude::server::*;
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
@@ -27,8 +25,19 @@ impl Plugin for ServerNetworkPlugin {
         app.add_plugins(lightyear::prelude::server::ServerPlugins {
             tick_duration: std::time::Duration::from_secs_f64(1.0 / 64.0),
         });
-        app.add_plugins(lightyear::prelude::server::NetcodeServerPlugin);
         app.add_systems(Startup, server_setup);
+        app.add_systems(Update, handle_connections);
+    }
+}
+
+fn handle_connections(mut commands: Commands, query: Query<Entity, Added<Connected>>) {
+    for entity in query.iter() {
+        println!("Client connected! Entity: {:?}", entity);
+        commands.spawn((
+            PlayerId(entity.to_bits()),
+            PlayerPosition(Vec3::ZERO),
+            Replicate::default(),
+        ));
     }
 }
 
@@ -41,7 +50,7 @@ fn server_setup(mut commands: Commands) {
                 .with_protocol_id(1)
                 .with_key([0; 32]),
         ),
-        LocalAddr(server_addr), // The address to bind to
+        LocalAddr(server_addr),
     ));
 }
 
@@ -52,7 +61,6 @@ impl Plugin for ClientNetworkPlugin {
         app.add_plugins(lightyear::prelude::client::ClientPlugins {
             tick_duration: std::time::Duration::from_secs_f64(1.0 / 64.0),
         });
-        app.add_plugins(lightyear::prelude::client::NetcodeClientPlugin);
         app.add_systems(Startup, client_setup);
     }
 }
@@ -72,6 +80,6 @@ fn client_setup(mut commands: Commands) {
             auth,
             lightyear::prelude::client::NetcodeConfig::default(),
         ).unwrap(),
-        LocalAddr(client_addr), // The address to bind to
+        LocalAddr(client_addr),
     ));
 }

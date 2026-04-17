@@ -1,14 +1,22 @@
 use bevy::prelude::*;
 use bevy_third_person_camera::{ThirdPersonCamera, ThirdPersonCameraTarget};
+use lightyear::prelude::Replicate;
 use crate::db;
 use crate::inventory::{Hotbar, Inventory, ItemRegistry, Spell, SpellBook};
+use crate::network::{PlayerId, PlayerPosition};
 
 pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, (seed_item_registry, spawn_player).chain())
-            .add_systems(Update, (move_player, apply_jump));
+            .add_systems(Update, (
+                move_player, 
+                apply_jump, 
+                sync_local_player_position, 
+                sync_remote_player_position, 
+                spawn_remote_players
+            ));
     }
 }
 
@@ -93,6 +101,9 @@ fn spawn_player(
 
     commands.spawn((
         Player,
+        PlayerId(0), // Replaced or managed by server later
+        PlayerPosition(Vec3::new(0.0, 1.0, 0.0)),
+        Replicate::default(),
         ThirdPersonCameraTarget,
         Jumper::default(),
         inventory,
@@ -105,6 +116,42 @@ fn spawn_player(
         })),
         Transform::from_xyz(0.0, 1.0, 0.0),
     ));
+}
+
+// ── Replication & Remote Players ──────────────────────────────────────────────
+
+fn sync_local_player_position(
+    mut query: Query<(&Transform, &mut PlayerPosition), (With<Player>, Changed<Transform>)>,
+) {
+    for (transform, mut player_pos) in query.iter_mut() {
+        player_pos.0 = transform.translation;
+    }
+}
+
+fn sync_remote_player_position(
+    mut query: Query<(&PlayerPosition, &mut Transform), (Without<Player>, Changed<PlayerPosition>)>,
+) {
+    for (player_pos, mut transform) in query.iter_mut() {
+        transform.translation = player_pos.0;
+    }
+}
+
+fn spawn_remote_players(
+    mut commands: Commands,
+    query: Query<Entity, (Added<PlayerId>, Without<Player>)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for entity in query.iter() {
+        commands.entity(entity).insert((
+            Mesh3d(meshes.add(Capsule3d::new(0.5, 1.0))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::srgb(0.2, 0.2, 0.8), // Blue for remote players
+                ..default()
+            })),
+            Transform::from_xyz(0.0, 1.0, 0.0),
+        ));
+    }
 }
 
 // ── Update systems ────────────────────────────────────────────────────────────
