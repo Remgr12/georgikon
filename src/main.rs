@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use clap::Parser;
 
 use audio::AudioPlugin;
-use client::{CameraPlugin, ChatPlugin, ClientPlayerPlugin, UiPlugin, WorldPlugin};
+use client::{CameraPlugin, ChatPlugin, ClientPlayerPlugin, InputPlugin, UiPlugin, WorldPlugin};
 use common::inventory::InventoryPlugin;
 use game::GamePlugin;
 use net::{ClientNetworkPlugin, ServerNetworkPlugin, SharedPlugin};
@@ -59,6 +59,7 @@ fn main() {
         app.add_plugins(DefaultPlugins);
         // Foundation: settings and screen state machine first.
         app.add_plugins((SettingsPlugin, ScreenPlugin));
+        app.add_plugins(InputPlugin);
         // Audio (bevy_seedling) must come after DefaultPlugins.
         app.add_plugins(AudioPlugin);
         app.add_plugins(ClientNetworkPlugin);
@@ -76,6 +77,7 @@ fn main() {
     } else {
         app.add_plugins(DefaultPlugins);
         app.add_plugins((SettingsPlugin, ScreenPlugin));
+        app.add_plugins(InputPlugin);
         app.add_plugins(AudioPlugin);
         app.add_plugins((ServerNetworkPlugin, ClientNetworkPlugin));
         app.add_plugins(SharedPlugin);

@@ -12,6 +12,7 @@ use bevy::ui::UiTargetCamera;
 use bevy_seedling::prelude::*;
 
 use crate::client::camera::SceneCamera;
+use crate::client::input::{ActionState, GameAction};
 use crate::client::player::Player;
 use crate::common::inventory::{HOTBAR_SLOTS, Hotbar, Inventory, ItemRegistry, SpellBook};
 use crate::screens::{GoTo, Screen};
@@ -36,6 +37,7 @@ impl Plugin for UiPlugin {
                 handle_pause_buttons,
                 update_volume_labels,
                 update_fov_label,
+                update_movement_labels,
                 handle_setting_controls,
                 save_settings_on_click,
             ),
@@ -113,6 +115,12 @@ enum SettingControl {
     SfxDown,
     FovUp,
     FovDown,
+    WalkSpeedUp,
+    WalkSpeedDown,
+    SprintSpeedUp,
+    SprintSpeedDown,
+    JumpForceUp,
+    JumpForceDown,
 }
 
 // ── Volume / FOV label markers ────────────────────────────────────────────────
@@ -125,6 +133,12 @@ struct MusicVolumeLabel;
 struct SfxVolumeLabel;
 #[derive(Component)]
 struct FovLabel;
+#[derive(Component)]
+struct WalkSpeedLabel;
+#[derive(Component)]
+struct SprintSpeedLabel;
+#[derive(Component)]
+struct JumpForceLabel;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hotbar UI
@@ -504,6 +518,27 @@ fn spawn_pause_menu(mut commands: Commands, settings: Res<Settings>) {
                             SettingControl::FovUp,
                             &format!("{:.0}", settings.fov),
                         ));
+                        s.spawn(setting_row(
+                            "Walk Speed",
+                            WalkSpeedLabel,
+                            SettingControl::WalkSpeedDown,
+                            SettingControl::WalkSpeedUp,
+                            &format!("{:.1}", settings.gameplay.walk_speed),
+                        ));
+                        s.spawn(setting_row(
+                            "Sprint Speed",
+                            SprintSpeedLabel,
+                            SettingControl::SprintSpeedDown,
+                            SettingControl::SprintSpeedUp,
+                            &format!("{:.1}", settings.gameplay.sprint_speed),
+                        ));
+                        s.spawn(setting_row(
+                            "Jump Force",
+                            JumpForceLabel,
+                            SettingControl::JumpForceDown,
+                            SettingControl::JumpForceUp,
+                            &format!("{:.1}", settings.gameplay.jump_force),
+                        ));
 
                         // Save + Back row
                         s.spawn(Node {
@@ -663,10 +698,14 @@ fn setting_row<M: Bundle>(
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn toggle_pause_menu(
-    keys: Res<ButtonInput<KeyCode>>,
+    actions: Res<ActionState>,
+    chat_state: Option<Res<crate::client::chat::ChatState>>,
     mut pause_menu: Query<&mut Visibility, With<PauseMenu>>,
 ) {
-    if !keys.just_pressed(KeyCode::Escape) {
+    if chat_state.as_ref().is_some_and(|c| c.is_typing) {
+        return;
+    }
+    if !actions.just_pressed(GameAction::TogglePause) {
         return;
     }
     let Ok(mut vis) = pause_menu.single_mut() else {
@@ -725,6 +764,7 @@ const VOLUME_STEP: f32 = 0.05;
 const FOV_STEP: f32 = 5.0;
 const FOV_MIN: f32 = 20.0;
 const FOV_MAX: f32 = 120.0;
+const MOVEMENT_STEP: f32 = 0.5;
 
 fn handle_setting_controls(
     q: Query<(&Interaction, &SettingControl), Changed<Interaction>>,
@@ -790,6 +830,30 @@ fn handle_setting_controls(
             SettingControl::FovDown => {
                 settings.fov = (settings.fov - FOV_STEP).max(FOV_MIN);
                 apply_fov(&settings, &mut camera);
+            }
+            SettingControl::WalkSpeedUp => {
+                settings.gameplay.walk_speed =
+                    (settings.gameplay.walk_speed + MOVEMENT_STEP).min(20.0);
+            }
+            SettingControl::WalkSpeedDown => {
+                settings.gameplay.walk_speed =
+                    (settings.gameplay.walk_speed - MOVEMENT_STEP).max(1.0);
+            }
+            SettingControl::SprintSpeedUp => {
+                settings.gameplay.sprint_speed =
+                    (settings.gameplay.sprint_speed + MOVEMENT_STEP).min(25.0);
+            }
+            SettingControl::SprintSpeedDown => {
+                settings.gameplay.sprint_speed = (settings.gameplay.sprint_speed - MOVEMENT_STEP)
+                    .max(settings.gameplay.walk_speed);
+            }
+            SettingControl::JumpForceUp => {
+                settings.gameplay.jump_force =
+                    (settings.gameplay.jump_force + MOVEMENT_STEP).min(20.0);
+            }
+            SettingControl::JumpForceDown => {
+                settings.gameplay.jump_force =
+                    (settings.gameplay.jump_force - MOVEMENT_STEP).max(1.0);
             }
         }
     }
@@ -869,5 +933,46 @@ fn update_fov_label(settings: Res<Settings>, mut label: Query<&mut Text, With<Fo
     }
     if let Ok(mut t) = label.single_mut() {
         t.0 = format!("{:.0}", settings.fov);
+    }
+}
+
+fn update_movement_labels(
+    settings: Res<Settings>,
+    mut walk: Query<
+        &mut Text,
+        (
+            With<WalkSpeedLabel>,
+            Without<SprintSpeedLabel>,
+            Without<JumpForceLabel>,
+        ),
+    >,
+    mut sprint: Query<
+        &mut Text,
+        (
+            With<SprintSpeedLabel>,
+            Without<WalkSpeedLabel>,
+            Without<JumpForceLabel>,
+        ),
+    >,
+    mut jump: Query<
+        &mut Text,
+        (
+            With<JumpForceLabel>,
+            Without<WalkSpeedLabel>,
+            Without<SprintSpeedLabel>,
+        ),
+    >,
+) {
+    if !settings.is_changed() {
+        return;
+    }
+    if let Ok(mut t) = walk.single_mut() {
+        t.0 = format!("{:.1}", settings.gameplay.walk_speed);
+    }
+    if let Ok(mut t) = sprint.single_mut() {
+        t.0 = format!("{:.1}", settings.gameplay.sprint_speed);
+    }
+    if let Ok(mut t) = jump.single_mut() {
+        t.0 = format!("{:.1}", settings.gameplay.jump_force);
     }
 }

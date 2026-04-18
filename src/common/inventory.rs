@@ -1,3 +1,4 @@
+use crate::client::input::{ActionState, GameAction};
 use bevy::prelude::*;
 use std::collections::HashMap;
 
@@ -10,8 +11,19 @@ impl Plugin for InventoryPlugin {
             .add_observer(handle_add_item)
             .add_observer(handle_remove_item)
             .add_observer(handle_equip_to_hotbar)
+            .add_observer(handle_use_hotbar_slot)
+            .add_observer(handle_swap_hotbar_slots)
+            .add_observer(handle_drop_hotbar_slot)
+            .add_observer(handle_sort_inventory)
             // Spell cooldowns and casting are pure per-frame logic.
-            .add_systems(Update, (tick_spell_cooldowns, handle_spell_cast));
+            .add_systems(
+                Update,
+                (
+                    tick_spell_cooldowns,
+                    handle_spell_cast,
+                    drive_inventory_actions_from_input,
+                ),
+            );
     }
 }
 
@@ -164,6 +176,29 @@ pub struct EquipToHotbarEvent {
     pub hotbar_slot: usize,
 }
 
+/// Use (consume) one item from a hotbar slot's bound inventory stack.
+#[derive(Event)]
+pub struct UseHotbarSlotEvent {
+    pub hotbar_slot: usize,
+}
+
+/// Swap two hotbar bindings.
+#[derive(Event)]
+pub struct SwapHotbarSlotsEvent {
+    pub a: usize,
+    pub b: usize,
+}
+
+/// Drop one item from a bound hotbar stack.
+#[derive(Event)]
+pub struct DropHotbarSlotEvent {
+    pub hotbar_slot: usize,
+}
+
+/// Sort inventory by item ID for deterministic ordering.
+#[derive(Event)]
+pub struct SortInventoryEvent;
+
 // ── Observer handlers ─────────────────────────────────────────────────────────
 
 fn handle_add_item(
@@ -223,6 +258,73 @@ fn handle_equip_to_hotbar(
     }
 }
 
+fn handle_use_hotbar_slot(
+    ev: On<UseHotbarSlotEvent>,
+    mut query: Query<(&mut Inventory, &mut Hotbar), With<crate::client::player::Player>>,
+) {
+    let Ok((mut inventory, mut hotbar)) = query.single_mut() else {
+        return;
+    };
+    let Some(slot_idx) = hotbar.bindings.get(ev.hotbar_slot).copied().flatten() else {
+        return;
+    };
+
+    let prev_len = inventory.slots.len();
+    let removed = inventory.remove_from_slot(slot_idx, 1);
+    if removed == 0 {
+        return;
+    }
+    if inventory.slots.len() < prev_len {
+        for binding in hotbar.bindings.iter_mut() {
+            match *binding {
+                Some(idx) if idx == slot_idx => *binding = None,
+                Some(idx) if idx > slot_idx => *binding = Some(idx - 1),
+                _ => {}
+            }
+        }
+    }
+}
+
+fn handle_swap_hotbar_slots(
+    ev: On<SwapHotbarSlotsEvent>,
+    mut query: Query<&mut Hotbar, With<crate::client::player::Player>>,
+) {
+    let Ok(mut hotbar) = query.single_mut() else {
+        return;
+    };
+    if ev.a >= HOTBAR_SLOTS || ev.b >= HOTBAR_SLOTS {
+        return;
+    }
+    hotbar.bindings.swap(ev.a, ev.b);
+}
+
+fn handle_drop_hotbar_slot(
+    ev: On<DropHotbarSlotEvent>,
+    mut commands: Commands,
+    query: Query<&Hotbar, With<crate::client::player::Player>>,
+) {
+    let Ok(hotbar) = query.single() else {
+        return;
+    };
+    let Some(slot_idx) = hotbar.bindings.get(ev.hotbar_slot).copied().flatten() else {
+        return;
+    };
+    commands.trigger(RemoveItemEvent {
+        slot_index: slot_idx,
+        quantity: 1,
+    });
+}
+
+fn handle_sort_inventory(
+    _ev: On<SortInventoryEvent>,
+    mut query: Query<&mut Inventory, With<crate::client::player::Player>>,
+) {
+    let Ok(mut inventory) = query.single_mut() else {
+        return;
+    };
+    inventory.slots.sort_by_key(|s| (s.item_id, s.quantity));
+}
+
 // ── Update systems ────────────────────────────────────────────────────────────
 
 fn tick_spell_cooldowns(
@@ -241,17 +343,52 @@ fn tick_spell_cooldowns(
 }
 
 fn handle_spell_cast(
-    keys: Res<ButtonInput<KeyCode>>,
+    actions: Res<ActionState>,
     mut query: Query<&mut SpellBook, With<crate::client::player::Player>>,
 ) {
     let Ok(mut spellbook) = query.single_mut() else {
         return;
     };
     for spell in spellbook.spells.iter_mut() {
-        if keys.just_pressed(spell.key) && spell.is_ready() {
+        let Some(action) = action_from_spell_key(spell.key) else {
+            continue;
+        };
+        if actions.just_pressed(action) && spell.is_ready() {
             spell.remaining_cooldown = spell.cooldown_secs;
             info!("Cast: {}", spell.name);
             // TODO: commands.trigger(SpellCastEvent { name: spell.name.clone() })
+        }
+    }
+}
+
+fn action_from_spell_key(key: KeyCode) -> Option<GameAction> {
+    match key {
+        KeyCode::Digit1 => Some(GameAction::HotbarSlot1),
+        KeyCode::Digit2 => Some(GameAction::HotbarSlot2),
+        KeyCode::Digit3 => Some(GameAction::HotbarSlot3),
+        KeyCode::Digit4 => Some(GameAction::HotbarSlot4),
+        KeyCode::Digit5 => Some(GameAction::HotbarSlot5),
+        KeyCode::Digit6 => Some(GameAction::HotbarSlot6),
+        _ => None,
+    }
+}
+
+fn drive_inventory_actions_from_input(actions: Res<ActionState>, mut commands: Commands) {
+    if actions.just_pressed(GameAction::InventorySort) {
+        commands.trigger(SortInventoryEvent);
+    }
+
+    let hotbar_actions = [
+        GameAction::HotbarSlot1,
+        GameAction::HotbarSlot2,
+        GameAction::HotbarSlot3,
+        GameAction::HotbarSlot4,
+        GameAction::HotbarSlot5,
+        GameAction::HotbarSlot6,
+    ];
+    for (idx, action) in hotbar_actions.into_iter().enumerate() {
+        if actions.just_pressed(action) {
+            commands.trigger(UseHotbarSlotEvent { hotbar_slot: idx });
         }
     }
 }

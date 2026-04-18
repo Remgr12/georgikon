@@ -25,6 +25,7 @@ pub struct Settings {
     pub sound: SoundSettings,
     /// Vertical field of view in degrees.
     pub fov: f32,
+    pub gameplay: GameplaySettings,
 }
 
 #[derive(Reflect, Deserialize, Serialize, Debug, Clone)]
@@ -37,6 +38,14 @@ pub struct SoundSettings {
     pub sfx: f32,
 }
 
+#[derive(Reflect, Deserialize, Serialize, Debug, Clone)]
+pub struct GameplaySettings {
+    pub walk_speed: f32,
+    pub sprint_speed: f32,
+    pub jump_force: f32,
+    pub gravity: f32,
+}
+
 impl Default for SoundSettings {
     fn default() -> Self {
         Self {
@@ -47,11 +56,23 @@ impl Default for SoundSettings {
     }
 }
 
+impl Default for GameplaySettings {
+    fn default() -> Self {
+        Self {
+            walk_speed: 5.0,
+            sprint_speed: 8.0,
+            jump_force: 7.0,
+            gravity: 20.0,
+        }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
             sound: SoundSettings::default(),
             fov: 60.0,
+            gameplay: GameplaySettings::default(),
         }
     }
 }

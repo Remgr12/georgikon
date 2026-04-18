@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use lightyear::prelude::AppMessageExt;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -15,7 +16,44 @@ impl Plugin for SharedPlugin {
     fn build(&self, app: &mut App) {
         app.register_component::<PlayerId>();
         app.register_component::<PlayerPosition>();
+        app.register_message::<MovementIntentMessage>();
+        app.register_message::<CombatIntentMessage>();
+        app.register_message::<InventoryIntentMessage>();
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MovementIntentMessage {
+    pub player_id: u64,
+    pub axis: [f32; 2],
+    pub jump_pressed: bool,
+    pub sprinting: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CombatIntentKind {
+    Primary,
+    Secondary,
+    Block,
+    Roll,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct CombatIntentMessage {
+    pub player_id: u64,
+    pub kind: CombatIntentKind,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InventoryIntentKind {
+    UseHotbarSlot(usize),
+    SortInventory,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct InventoryIntentMessage {
+    pub player_id: u64,
+    pub kind: InventoryIntentKind,
 }
 
 pub struct ServerNetworkPlugin;

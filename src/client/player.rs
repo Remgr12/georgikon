@@ -1,9 +1,10 @@
+use crate::client::input::{ActionState, GameAction};
 use crate::common::inventory::{Hotbar, Inventory, ItemRegistry, Spell, SpellBook};
 use crate::net::{PlayerId, PlayerPosition};
 use crate::server::db;
+use crate::settings::Settings;
 use bevy::prelude::*;
 use bevy_third_person_camera::{ThirdPersonCamera, ThirdPersonCameraTarget};
-use lightyear::prelude::Replicate;
 
 pub struct ClientPlayerPlugin;
 
@@ -15,6 +16,7 @@ impl Plugin for ClientPlayerPlugin {
                 (
                     move_player,
                     apply_jump,
+                    handle_combat_input,
                     sync_local_player_position,
                     sync_remote_player_position,
                     spawn_remote_players,
@@ -27,25 +29,26 @@ impl Plugin for ClientPlayerPlugin {
 pub struct Player;
 
 #[derive(Component)]
-pub struct Jumper {
+pub struct MovementState {
     pub velocity_y: f32,
-    pub jump_force: f32,
-    pub gravity: f32,
-    pub ground_y: f32,
+    pub sprinting: bool,
 }
 
-impl Default for Jumper {
+#[derive(Component, Default)]
+pub struct CombatState {
+    roll_cooldown: f32,
+}
+
+impl Default for MovementState {
     fn default() -> Self {
         Self {
             velocity_y: 0.0,
-            jump_force: 7.0,
-            gravity: 20.0,
-            ground_y: 1.0,
+            sprinting: false,
         }
     }
 }
 
-const SPEED: f32 = 5.0;
+const GROUND_Y: f32 = 1.0;
 
 fn seed_item_registry(mut registry: ResMut<ItemRegistry>) {
     let conn = match db::open() {
@@ -106,9 +109,9 @@ fn spawn_player(
         Player,
         PlayerId(0),
         PlayerPosition(Vec3::new(0.0, 1.0, 0.0)),
-        Replicate::default(),
         ThirdPersonCameraTarget,
-        Jumper::default(),
+        MovementState::default(),
+        CombatState::default(),
         inventory,
         hotbar,
         SpellBook { spells },
@@ -156,15 +159,16 @@ fn spawn_remote_players(
 }
 
 fn move_player(
-    keys: Res<ButtonInput<KeyCode>>,
+    action_state: Res<ActionState>,
+    settings: Res<Settings>,
     time: Res<Time>,
     camera_query: Query<&Transform, (With<ThirdPersonCamera>, Without<Player>)>,
-    mut player_query: Query<&mut Transform, With<Player>>,
+    mut player_query: Query<(&mut Transform, &mut MovementState), With<Player>>,
 ) {
     let Ok(cam_transform) = camera_query.single() else {
         return;
     };
-    let Ok(mut player_transform) = player_query.single_mut() else {
+    let Ok((mut player_transform, mut movement)) = player_query.single_mut() else {
         return;
     };
 
@@ -173,49 +177,72 @@ fn move_player(
     let forward = Vec3::new(cam_fwd.x, 0.0, cam_fwd.z).normalize_or_zero();
     let right = Vec3::new(cam_right.x, 0.0, cam_right.z).normalize_or_zero();
 
-    let mut direction = Vec3::ZERO;
-    if keys.pressed(KeyCode::KeyW) {
-        direction += forward;
-    }
-    if keys.pressed(KeyCode::KeyS) {
-        direction -= forward;
-    }
-    if keys.pressed(KeyCode::KeyA) {
-        direction -= right;
-    }
-    if keys.pressed(KeyCode::KeyD) {
-        direction += right;
-    }
+    let axis = action_state.movement_axis();
+    let mut direction = forward * axis.y + right * axis.x;
+    movement.sprinting = action_state.pressed(GameAction::Sprint);
+    let speed = if movement.sprinting {
+        settings.gameplay.sprint_speed
+    } else {
+        settings.gameplay.walk_speed
+    };
 
     if direction.length_squared() > 0.0 {
-        direction = direction.normalize();
-        player_transform.translation += direction * SPEED * time.delta_secs();
-        let target = player_transform.translation + direction;
-        player_transform.look_at(target, Vec3::Y);
+        direction = direction.normalize_or_zero();
+        if let Ok(dir) = Dir3::new(direction) {
+            player_transform.translation += dir.as_vec3() * speed * time.delta_secs();
+            player_transform.look_to(dir, Dir3::Y);
+        }
     }
 }
 
 fn apply_jump(
-    keys: Res<ButtonInput<KeyCode>>,
+    action_state: Res<ActionState>,
+    settings: Res<Settings>,
     time: Res<Time>,
-    mut query: Query<(&mut Transform, &mut Jumper), With<Player>>,
+    mut query: Query<(&mut Transform, &mut MovementState), With<Player>>,
 ) {
-    let Ok((mut transform, mut jumper)) = query.single_mut() else {
+    let Ok((mut transform, mut movement)) = query.single_mut() else {
         return;
     };
     let dt = time.delta_secs();
 
-    let grounded = transform.translation.y <= jumper.ground_y + f32::EPSILON;
+    let grounded = transform.translation.y <= GROUND_Y + f32::EPSILON;
 
-    if keys.just_pressed(KeyCode::Space) && grounded {
-        jumper.velocity_y = jumper.jump_force;
+    if action_state.just_pressed(GameAction::Jump) && grounded {
+        movement.velocity_y = settings.gameplay.jump_force;
     }
 
-    jumper.velocity_y -= jumper.gravity * dt;
-    transform.translation.y += jumper.velocity_y * dt;
+    movement.velocity_y -= settings.gameplay.gravity * dt;
+    transform.translation.y += movement.velocity_y * dt;
 
-    if transform.translation.y < jumper.ground_y {
-        transform.translation.y = jumper.ground_y;
-        jumper.velocity_y = 0.0;
+    if transform.translation.y < GROUND_Y {
+        transform.translation.y = GROUND_Y;
+        movement.velocity_y = 0.0;
+    }
+}
+
+fn handle_combat_input(
+    action_state: Res<ActionState>,
+    time: Res<Time>,
+    mut player_q: Query<&mut CombatState, With<Player>>,
+) {
+    let Ok(mut combat_state) = player_q.single_mut() else {
+        return;
+    };
+
+    combat_state.roll_cooldown = (combat_state.roll_cooldown - time.delta_secs()).max(0.0);
+
+    if action_state.just_pressed(GameAction::Primary) {
+        info!("Primary input fired");
+    }
+    if action_state.just_pressed(GameAction::Secondary) {
+        info!("Secondary input fired");
+    }
+    if action_state.just_pressed(GameAction::Block) {
+        info!("Block input fired");
+    }
+    if action_state.just_pressed(GameAction::Roll) && combat_state.roll_cooldown <= 0.0 {
+        combat_state.roll_cooldown = 0.6;
+        info!("Roll input fired");
     }
 }

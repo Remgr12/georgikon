@@ -5,6 +5,7 @@ use bevy_third_person_camera::{
     CameraSyncSet, ThirdPersonCamera, ThirdPersonCameraPlugin, ThirdPersonCameraTarget, Zoom,
 };
 
+use crate::client::input::{ActionState, GameAction};
 use crate::client::world::GROUND_TOP_Y;
 use crate::screens::Screen;
 use crate::settings::Settings;
@@ -13,19 +14,16 @@ pub struct CameraPlugin;
 
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(ThirdPersonCameraPlugin)
+        app.init_resource::<CameraRuntimeMode>()
+            .add_plugins(ThirdPersonCameraPlugin)
             .add_systems(Startup, spawn_camera)
             .add_systems(PostStartup, attach_initial_gameplay_camera)
             .add_systems(OnEnter(Screen::Gameplay), attach_third_person_camera)
             .add_systems(OnExit(Screen::Gameplay), detach_third_person_camera)
+            .add_systems(Update, cycle_camera_mode.run_if(in_state(Screen::Gameplay)))
             .add_systems(
                 PostUpdate,
-                (
-                    smooth_camera_motion,
-                    prevent_camera_ground_clipping,
-                    enforce_upright_camera,
-                )
-                    .chain()
+                prevent_camera_ground_clipping
                     .after(CameraSyncSet)
                     .before(TransformSystems::Propagate)
                     .run_if(in_state(Screen::Gameplay)),
@@ -37,8 +35,14 @@ impl Plugin for CameraPlugin {
 #[derive(Component)]
 pub struct SceneCamera;
 
+#[derive(Resource, Clone, Copy, Debug, Eq, PartialEq, Default)]
+enum CameraRuntimeMode {
+    Tight,
+    #[default]
+    Default,
+}
+
 fn spawn_camera(mut commands: Commands) {
-    // Spawn without ThirdPersonCamera – it is attached in attach_third_person_camera.
     commands.spawn((SceneCamera, Camera3d::default(), IsDefaultUiCamera));
 }
 
@@ -53,12 +57,10 @@ fn attach_initial_gameplay_camera(
     }
 
     let Ok(cam) = camera.single() else {
-        debug!("attach_initial_gameplay_camera: camera entity not found or already has TPC");
         return;
     };
 
     insert_gameplay_camera_components(&mut commands, cam, &settings);
-    debug!("attach_initial_gameplay_camera: attached third-person camera");
 }
 
 fn attach_third_person_camera(
@@ -67,7 +69,6 @@ fn attach_third_person_camera(
     camera: Query<Entity, (With<SceneCamera>, Without<ThirdPersonCamera>)>,
 ) {
     let Ok(cam) = camera.single() else {
-        debug!("attach_third_person_camera: camera entity not found or already has TPC");
         return;
     };
 
@@ -78,12 +79,16 @@ fn insert_gameplay_camera_components(commands: &mut Commands, cam: Entity, setti
     commands.entity(cam).insert((
         ThirdPersonCamera {
             zoom: Zoom::new(3.0, 12.0),
-            sensitivity: Vec2::new(4.5, 4.5),
+            sensitivity: Vec2::new(3.8, 2.8),
+            zoom_sensitivity: 0.7,
+            mouse_orbit_button_enabled: false,
+            cursor_lock_toggle_enabled: false,
+            cursor_lock_active: true,
             cursor_lock_key: KeyCode::Tab,
-            offset_enabled: false,
+            offset_enabled: true,
+            offset: bevy_third_person_camera::Offset::new(0.7, 0.35),
             ..default()
         },
-        CameraSmoothingState::default(),
         Projection::from(PerspectiveProjection {
             fov: settings.fov.to_radians(),
             ..Default::default()
@@ -91,63 +96,47 @@ fn insert_gameplay_camera_components(commands: &mut Commands, cam: Entity, setti
     ));
 }
 
-#[derive(Component, Default)]
-struct CameraSmoothingState {
-    initialized: bool,
-    translation: Vec3,
-    rotation: Quat,
-}
-
-const CAMERA_POSITION_SMOOTHING: f32 = 30.0;
-const CAMERA_ROTATION_SMOOTHING: f32 = 34.0;
-const CAMERA_TRANSLATION_DEADZONE: f32 = 0.012;
-const CAMERA_ROTATION_DEADZONE: f32 = 0.003;
-const CAMERA_GROUND_CLEARANCE: f32 = 0.25;
-
-fn smooth_camera_motion(
-    time: Res<Time>,
-    mut camera: Query<
-        (&mut Transform, &mut CameraSmoothingState),
-        (With<SceneCamera>, With<ThirdPersonCamera>),
-    >,
+fn cycle_camera_mode(
+    action_state: Res<ActionState>,
+    mut mode: ResMut<CameraRuntimeMode>,
+    mut camera: Query<&mut ThirdPersonCamera, With<SceneCamera>>,
 ) {
-    let Ok((mut camera_tf, mut smoothing)) = camera.single_mut() else {
+    if !action_state.just_pressed(GameAction::CycleCameraMode) {
+        return;
+    }
+    let Ok(mut cam) = camera.single_mut() else {
         return;
     };
 
-    let target_translation = camera_tf.translation;
-    let target_rotation = camera_tf.rotation;
+    *mode = match *mode {
+        CameraRuntimeMode::Default => CameraRuntimeMode::Tight,
+        CameraRuntimeMode::Tight => CameraRuntimeMode::Default,
+    };
 
-    if !smoothing.initialized {
-        smoothing.translation = target_translation;
-        smoothing.rotation = target_rotation;
-        smoothing.initialized = true;
-        return;
+    match *mode {
+        CameraRuntimeMode::Default => {
+            cam.zoom = Zoom::new(3.0, 12.0);
+            cam.offset = bevy_third_person_camera::Offset::new(0.7, 0.25);
+        }
+        CameraRuntimeMode::Tight => {
+            cam.zoom = Zoom::new(2.0, 8.0);
+            cam.offset = bevy_third_person_camera::Offset::new(0.35, 0.15);
+        }
     }
-
-    let dt = time.delta_secs();
-    let translation_delta = smoothing.translation.distance(target_translation);
-    let rotation_delta = smoothing.rotation.angle_between(target_rotation).abs();
-
-    if translation_delta < CAMERA_TRANSLATION_DEADZONE && rotation_delta < CAMERA_ROTATION_DEADZONE
-    {
-        camera_tf.translation = smoothing.translation;
-        camera_tf.rotation = smoothing.rotation;
-        return;
-    }
-
-    let pos_alpha = 1.0 - (-CAMERA_POSITION_SMOOTHING * dt).exp();
-    let rot_alpha = 1.0 - (-CAMERA_ROTATION_SMOOTHING * dt).exp();
-
-    smoothing.translation = smoothing.translation.lerp(target_translation, pos_alpha);
-    smoothing.rotation = smoothing.rotation.slerp(target_rotation, rot_alpha);
-
-    camera_tf.translation = smoothing.translation;
-    camera_tf.rotation = smoothing.rotation;
 }
 
+fn detach_third_person_camera(
+    mut commands: Commands,
+    camera: Query<Entity, With<ThirdPersonCamera>>,
+) {
+    if let Ok(cam) = camera.single() {
+        commands.entity(cam).remove::<ThirdPersonCamera>();
+    }
+}
+
+const CAMERA_GROUND_CLEARANCE: f32 = 0.25;
+
 fn prevent_camera_ground_clipping(
-    target: Query<&Transform, With<ThirdPersonCameraTarget>>,
     mut camera: Query<
         &mut Transform,
         (
@@ -157,9 +146,6 @@ fn prevent_camera_ground_clipping(
         ),
     >,
 ) {
-    let Ok(target_tf) = target.single() else {
-        return;
-    };
     let Ok(mut camera_tf) = camera.single_mut() else {
         return;
     };
@@ -167,28 +153,5 @@ fn prevent_camera_ground_clipping(
     let min_camera_y = GROUND_TOP_Y + CAMERA_GROUND_CLEARANCE;
     if camera_tf.translation.y < min_camera_y {
         camera_tf.translation.y = min_camera_y;
-        camera_tf.look_at(target_tf.translation, Vec3::Y);
-    }
-}
-
-fn enforce_upright_camera(
-    mut camera: Query<&mut Transform, (With<SceneCamera>, With<ThirdPersonCamera>)>,
-) {
-    let Ok(mut camera_tf) = camera.single_mut() else {
-        return;
-    };
-
-    let (yaw, pitch, _) = camera_tf.rotation.to_euler(EulerRot::YXZ);
-    camera_tf.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
-}
-
-fn detach_third_person_camera(
-    mut commands: Commands,
-    camera: Query<Entity, With<ThirdPersonCamera>>,
-) {
-    if let Ok(cam) = camera.single() {
-        commands
-            .entity(cam)
-            .remove::<(ThirdPersonCamera, CameraSmoothingState)>();
     }
 }
