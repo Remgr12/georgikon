@@ -1,6 +1,7 @@
 use crate::client::input::{ActionState, GameAction};
 use bevy::prelude::*;
 use std::collections::HashMap;
+use tracing::info;
 
 pub struct InventoryPlugin;
 

@@ -5,17 +5,10 @@ edition = "2024"
 
 [dependencies]
 base64 = "0.22.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter"] }
 bevy = { version = "0.18.1", default-features = false, features = [
-    "bevy_core_pipeline",
-    "bevy_gltf",
-    "bevy_pbr",
-    "bevy_picking",
-    "bevy_render",
-    "bevy_scene",
-    "bevy_state",
-    "bevy_text",
-    "bevy_ui",
-    "bevy_winit",
+    "3d",
     "default_font",
     "hdr",
     "ktx2",
@@ -29,7 +22,7 @@ bevy = { version = "0.18.1", default-features = false, features = [
     "zstd_rust",
 ] }
 bevy_seedling = { version = "0.7", features = ["hrtf"] }
-bevy_third_person_camera = "0.4.0"
+#bevy_third_person_camera = "0.4.0"
 clap = { version = "4.6.1", features = ["derive"] }
 lightyear = { version = "0.26.4", features = ["netcode", "udp"] }
 rand = "0.9"
@@ -39,7 +32,14 @@ rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 
-# Compile dependencies with optimizations in debug builds.
-# Without this Bevy runs at ~5 fps in dev; with it, near release speed.
-[profile.dev.package."*"]
+# Fast incremental compiles - optimized bevy only for playable framerate
+[profile.dev.package.bevy]
 opt-level = 3
+
+[profile.dev.package.bevy_internal]
+opt-level = 2
+
+# All other deps use default (0)
+[profile.dev]
+opt-level = 0
+debug = true

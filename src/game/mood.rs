@@ -22,6 +22,7 @@ use bevy_seedling::prelude::{
     AudioSample, MusicPool, SamplePlayer, Volume, VolumeNode, sample_effects,
 };
 use rand::prelude::IndexedRandom;
+use tracing::{debug, trace};
 
 use crate::audio::{FadeIn, FadeOut};
 use crate::screens::Screen;

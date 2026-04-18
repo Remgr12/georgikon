@@ -4,6 +4,7 @@
 //! Call `Settings::save()` to persist changes back to disk.
 
 use bevy::prelude::*;
+use tracing::info;
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fs};
 

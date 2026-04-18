@@ -11,6 +11,7 @@ use bevy_seedling::prelude::{
     VolumeNode,
 };
 use std::time::Duration;
+use tracing::debug;
 
 use crate::settings::Settings;
 

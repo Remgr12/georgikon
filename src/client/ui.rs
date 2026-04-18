@@ -10,6 +10,7 @@
 use bevy::prelude::*;
 use bevy::ui::UiTargetCamera;
 use bevy_seedling::prelude::*;
+use tracing::{error, info};
 
 use crate::client::camera::SceneCamera;
 use crate::client::input::{ActionState, GameAction};

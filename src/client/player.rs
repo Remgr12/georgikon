@@ -1,10 +1,13 @@
+use tracing::{error, info};
+
 use crate::client::input::{ActionState, GameAction};
 use crate::common::inventory::{Hotbar, Inventory, ItemRegistry, Spell, SpellBook};
 use crate::net::{PlayerId, PlayerPosition};
 use crate::server::db;
 use crate::settings::Settings;
 use bevy::prelude::*;
-use bevy_third_person_camera::{ThirdPersonCamera, ThirdPersonCameraTarget};
+
+use crate::client::camera::SceneCamera;
 
 pub struct ClientPlayerPlugin;
 
@@ -49,6 +52,7 @@ impl Default for MovementState {
 }
 
 const GROUND_Y: f32 = 1.0;
+const PLAYER_MESH_OFFSET_Y: f32 = -1.0;
 
 fn seed_item_registry(mut registry: ResMut<ItemRegistry>) {
     let conn = match db::open() {
@@ -74,8 +78,7 @@ fn seed_item_registry(mut registry: ResMut<ItemRegistry>) {
 
 fn spawn_player(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
     let spells: Vec<Spell> = db::open()
         .and_then(|conn| db::load_spells(&conn))
@@ -105,23 +108,26 @@ fn spawn_player(
     hotbar.bindings[1] = Some(1);
     hotbar.bindings[2] = Some(2);
 
-    commands.spawn((
-        Player,
-        PlayerId(0),
-        PlayerPosition(Vec3::new(0.0, 1.0, 0.0)),
-        ThirdPersonCameraTarget,
-        MovementState::default(),
-        CombatState::default(),
-        inventory,
-        hotbar,
-        SpellBook { spells },
-        Mesh3d(meshes.add(Capsule3d::new(0.5, 1.0))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.8, 0.2, 0.2),
-            ..default()
-        })),
-        Transform::from_xyz(0.0, 1.0, 0.0),
-    ));
+    let player_scene = asset_server.load("player.glb#Scene0");
+
+    commands
+        .spawn((
+            Player,
+            PlayerId(0),
+            PlayerPosition(Vec3::new(0.0, 1.0, 0.0)),
+            MovementState::default(),
+            CombatState::default(),
+            inventory,
+            hotbar,
+            SpellBook { spells },
+            Transform::from_xyz(0.0, 1.0, 0.0),
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                SceneRoot(player_scene),
+                Transform::from_xyz(0.0, PLAYER_MESH_OFFSET_Y, 0.0),
+            ));
+        });
 }
 
 fn sync_local_player_position(
@@ -143,18 +149,20 @@ fn sync_remote_player_position(
 fn spawn_remote_players(
     mut commands: Commands,
     query: Query<Entity, (Added<PlayerId>, Without<Player>)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
+    let player_scene = asset_server.load("player.glb#Scene0");
+
     for entity in query.iter() {
-        commands.entity(entity).insert((
-            Mesh3d(meshes.add(Capsule3d::new(0.5, 1.0))),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::srgb(0.2, 0.2, 0.8),
-                ..default()
-            })),
-            Transform::from_xyz(0.0, 1.0, 0.0),
-        ));
+        commands
+            .entity(entity)
+            .insert(Transform::from_xyz(0.0, 1.0, 0.0))
+            .with_children(|parent| {
+                parent.spawn((
+                    SceneRoot(player_scene.clone()),
+                    Transform::from_xyz(0.0, PLAYER_MESH_OFFSET_Y, 0.0),
+                ));
+            });
     }
 }
 
@@ -162,7 +170,7 @@ fn move_player(
     action_state: Res<ActionState>,
     settings: Res<Settings>,
     time: Res<Time>,
-    camera_query: Query<&Transform, (With<ThirdPersonCamera>, Without<Player>)>,
+    camera_query: Query<&Transform, (With<SceneCamera>, Without<Player>)>,
     mut player_query: Query<(&mut Transform, &mut MovementState), With<Player>>,
 ) {
     let Ok(cam_transform) = camera_query.single() else {

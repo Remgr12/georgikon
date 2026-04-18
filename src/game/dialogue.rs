@@ -22,6 +22,7 @@
 //! ```
 
 use bevy::prelude::*;
+use tracing::debug;
 
 pub struct DialoguePlugin;
 

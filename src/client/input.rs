@@ -1,4 +1,7 @@
+use bevy::ecs::message::MessageReader;
+use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
+
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -20,6 +23,8 @@ pub enum GameAction {
     ChatHistoryPrev,
     ChatHistoryNext,
     CycleCameraMode,
+    ZoomIn,
+    ZoomOut,
     InventorySort,
     HotbarSlot1,
     HotbarSlot2,
@@ -55,6 +60,8 @@ impl ActionMap {
             (KeyCode::ArrowDown, vec![ChatHistoryNext]),
             (KeyCode::KeyV, vec![CycleCameraMode]),
             (KeyCode::KeyR, vec![InventorySort]),
+            (KeyCode::KeyC, vec![ZoomIn]),
+            (KeyCode::KeyF, vec![ZoomOut]),
             (KeyCode::Digit1, vec![HotbarSlot1]),
             (KeyCode::Digit2, vec![HotbarSlot2]),
             (KeyCode::Digit3, vec![HotbarSlot3]),
@@ -78,6 +85,7 @@ pub struct ActionState {
     pressed: HashSet<GameAction>,
     just_pressed: HashSet<GameAction>,
     just_released: HashSet<GameAction>,
+    pub mouse_delta: Vec2,
 }
 
 impl ActionState {
@@ -107,7 +115,18 @@ impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActionMap>()
             .init_resource::<ActionState>()
-            .add_systems(PreUpdate, update_action_state);
+            .add_systems(PreUpdate, update_action_state)
+            .add_systems(PreUpdate, update_mouse_delta);
+    }
+}
+
+fn update_mouse_delta(
+    mut mouse_motion: MessageReader<MouseMotion>,
+    mut state: ResMut<ActionState>,
+) {
+    state.mouse_delta = Vec2::ZERO;
+    for motion in mouse_motion.read() {
+        state.mouse_delta += motion.delta;
     }
 }
 

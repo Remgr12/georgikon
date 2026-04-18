@@ -9,6 +9,7 @@ mod settings;
 
 use bevy::prelude::*;
 use clap::Parser;
+use tracing_subscriber::EnvFilter;
 
 use audio::AudioPlugin;
 use client::{CameraPlugin, ChatPlugin, ClientPlayerPlugin, InputPlugin, UiPlugin, WorldPlugin};
@@ -36,6 +37,10 @@ struct Args {
 }
 
 fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
     let args = Args::parse();
 
     let is_server = args.server;
