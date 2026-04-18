@@ -30,7 +30,13 @@ pub struct ItemRegistry(pub HashMap<u32, ItemDef>);
 
 impl ItemRegistry {
     pub fn register(&mut self, id: u32, name: impl Into<String>, color: Color) {
-        self.0.insert(id, ItemDef { name: name.into(), color });
+        self.0.insert(
+            id,
+            ItemDef {
+                name: name.into(),
+                color,
+            },
+        );
     }
 
     pub fn get(&self, id: u32) -> Option<&ItemDef> {
@@ -90,7 +96,9 @@ pub struct Hotbar {
 
 impl Default for Hotbar {
     fn default() -> Self {
-        Self { bindings: [None; HOTBAR_SLOTS] }
+        Self {
+            bindings: [None; HOTBAR_SLOTS],
+        }
     }
 }
 
@@ -162,7 +170,9 @@ fn handle_add_item(
     ev: On<AddItemEvent>,
     mut query: Query<&mut Inventory, With<crate::client::player::Player>>,
 ) {
-    let Ok(mut inventory) = query.single_mut() else { return };
+    let Ok(mut inventory) = query.single_mut() else {
+        return;
+    };
     inventory.add(ev.item_id, ev.quantity);
     info!("Inventory: added {}x item #{}", ev.quantity, ev.item_id);
 }
@@ -171,7 +181,9 @@ fn handle_remove_item(
     ev: On<RemoveItemEvent>,
     mut query: Query<(&mut Inventory, &mut Hotbar), With<crate::client::player::Player>>,
 ) {
-    let Ok((mut inventory, mut hotbar)) = query.single_mut() else { return };
+    let Ok((mut inventory, mut hotbar)) = query.single_mut() else {
+        return;
+    };
 
     let prev_len = inventory.slots.len();
     let removed = inventory.remove_from_slot(ev.slot_index, ev.quantity);
@@ -188,7 +200,10 @@ fn handle_remove_item(
     }
 
     if removed > 0 {
-        info!("Inventory: removed {}x from slot {}", removed, ev.slot_index);
+        info!(
+            "Inventory: removed {}x from slot {}",
+            removed, ev.slot_index
+        );
     }
 }
 
@@ -196,7 +211,9 @@ fn handle_equip_to_hotbar(
     ev: On<EquipToHotbarEvent>,
     mut query: Query<(&Inventory, &mut Hotbar), With<crate::client::player::Player>>,
 ) {
-    let Ok((inventory, mut hotbar)) = query.single_mut() else { return };
+    let Ok((inventory, mut hotbar)) = query.single_mut() else {
+        return;
+    };
     if ev.hotbar_slot < HOTBAR_SLOTS && ev.inventory_slot < inventory.slots.len() {
         hotbar.bindings[ev.hotbar_slot] = Some(ev.inventory_slot);
         info!(
@@ -212,7 +229,9 @@ fn tick_spell_cooldowns(
     time: Res<Time>,
     mut query: Query<&mut SpellBook, With<crate::client::player::Player>>,
 ) {
-    let Ok(mut spellbook) = query.single_mut() else { return };
+    let Ok(mut spellbook) = query.single_mut() else {
+        return;
+    };
     let dt = time.delta_secs();
     for spell in spellbook.spells.iter_mut() {
         if spell.remaining_cooldown > 0.0 {
@@ -225,7 +244,9 @@ fn handle_spell_cast(
     keys: Res<ButtonInput<KeyCode>>,
     mut query: Query<&mut SpellBook, With<crate::client::player::Player>>,
 ) {
-    let Ok(mut spellbook) = query.single_mut() else { return };
+    let Ok(mut spellbook) = query.single_mut() else {
+        return;
+    };
     for spell in spellbook.spells.iter_mut() {
         if keys.just_pressed(spell.key) && spell.is_ready() {
             spell.remaining_cooldown = spell.cooldown_secs;

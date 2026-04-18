@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use serde::Deserialize;
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Mutex;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 pub struct ChatPlugin {
@@ -57,46 +57,48 @@ impl Plugin for ChatPlugin {
 }
 
 fn setup_chat_ui(mut commands: Commands) {
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(10.0),
-            left: Val::Px(10.0),
-            flex_direction: FlexDirection::Column,
-            width: Val::Px(400.0),
-            height: Val::Px(300.0),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.8)),
-    )).with_children(|parent| {
-        parent.spawn((
-            Text::new(""),
-            TextFont {
-                font_size: 16.0,
-                ..default()
-            },
-            TextColor(Color::WHITE),
+    commands
+        .spawn((
             Node {
-                flex_grow: 1.0,
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(10.0),
+                left: Val::Px(10.0),
+                flex_direction: FlexDirection::Column,
+                width: Val::Px(400.0),
+                height: Val::Px(300.0),
                 ..default()
             },
-            ChatHistoryText,
-        ));
-        
-        parent.spawn((
-            Text::new("> "),
-            TextFont {
-                font_size: 16.0,
-                ..default()
-            },
-            TextColor(Color::srgb(0.5, 1.0, 0.5)),
-            Node {
-                height: Val::Px(30.0),
-                ..default()
-            },
-            ChatInputText,
-        ));
-    });
+            BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.8)),
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new(""),
+                TextFont {
+                    font_size: 16.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                Node {
+                    flex_grow: 1.0,
+                    ..default()
+                },
+                ChatHistoryText,
+            ));
+
+            parent.spawn((
+                Text::new("> "),
+                TextFont {
+                    font_size: 16.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.5, 1.0, 0.5)),
+                Node {
+                    height: Val::Px(30.0),
+                    ..default()
+                },
+                ChatInputText,
+            ));
+        });
 }
 
 fn receive_chat_messages(
@@ -109,7 +111,7 @@ fn receive_chat_messages(
                 let mut current = text.0.clone();
                 current.push_str(&msg);
                 current.push('\n');
-                
+
                 let lines: Vec<&str> = current.lines().collect();
                 if lines.len() > 15 {
                     text.0 = lines[lines.len() - 15..].join("\n") + "\n";
@@ -212,10 +214,10 @@ fn handle_chat_input(
         } else {
             println!("Local chat (no Zulip): {}", msg);
             for mut text in query.iter_mut() {
-                 let mut current = text.0.clone();
-                 current.push_str(&format!("Local: {}", msg));
-                 current.push('\n');
-                 text.0 = current;
+                let mut current = text.0.clone();
+                current.push_str(&format!("Local: {}", msg));
+                current.push('\n');
+                text.0 = current;
             }
         }
     }
@@ -256,10 +258,17 @@ struct ZulipMessage {
     sender_full_name: String,
 }
 
-fn poll_zulip(url: String, email: String, key: String, to_bevy: Sender<String>, from_bevy: Receiver<String>) {
+fn poll_zulip(
+    url: String,
+    email: String,
+    key: String,
+    to_bevy: Sender<String>,
+    from_bevy: Receiver<String>,
+) {
     let client = reqwest::blocking::Client::new();
-    
-    let reg_res = client.post(&format!("{}/api/v1/register", url))
+
+    let reg_res = client
+        .post(&format!("{}/api/v1/register", url))
         .basic_auth(&email, Some(&key))
         .form(&[("event_types", "[\"message\"]")])
         .send();
@@ -283,7 +292,8 @@ fn poll_zulip(url: String, email: String, key: String, to_bevy: Sender<String>, 
 
     loop {
         while let Ok(msg) = from_bevy.try_recv() {
-            let _ = client.post(&format!("{}/api/v1/messages", url))
+            let _ = client
+                .post(&format!("{}/api/v1/messages", url))
                 .basic_auth(&email, Some(&key))
                 .form(&[
                     ("type", "stream"),
@@ -294,9 +304,13 @@ fn poll_zulip(url: String, email: String, key: String, to_bevy: Sender<String>, 
                 .send();
         }
 
-        let ev_res = client.get(&format!("{}/api/v1/events", url))
+        let ev_res = client
+            .get(&format!("{}/api/v1/events", url))
             .basic_auth(&email, Some(&key))
-            .query(&[("queue_id", &queue_id), ("last_event_id", &last_event_id.to_string())])
+            .query(&[
+                ("queue_id", &queue_id),
+                ("last_event_id", &last_event_id.to_string()),
+            ])
             .send();
 
         match ev_res {

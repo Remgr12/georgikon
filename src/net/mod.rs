@@ -79,7 +79,8 @@ fn client_setup(mut commands: Commands) {
         lightyear::prelude::client::NetcodeClient::new(
             auth,
             lightyear::prelude::client::NetcodeConfig::default(),
-        ).unwrap(),
+        )
+        .unwrap(),
         LocalAddr(client_addr),
     ));
 }

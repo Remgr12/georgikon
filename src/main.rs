@@ -1,15 +1,23 @@
+mod audio;
 mod client;
 mod common;
+mod game;
 mod net;
+mod screens;
 mod server;
+mod settings;
 
 use bevy::prelude::*;
 use clap::Parser;
 
-use client::{CameraPlugin, ChatPlugin, UiPlugin, WorldPlugin, ClientPlayerPlugin};
+use audio::AudioPlugin;
+use client::{CameraPlugin, ChatPlugin, ClientPlayerPlugin, UiPlugin, WorldPlugin};
 use common::inventory::InventoryPlugin;
+use game::GamePlugin;
 use net::{ClientNetworkPlugin, ServerNetworkPlugin, SharedPlugin};
+use screens::ScreenPlugin;
 use server::GuildPlugin;
+use settings::SettingsPlugin;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -49,16 +57,38 @@ fn main() {
         app.add_systems(Startup, server_setup);
     } else if is_client && !is_server {
         app.add_plugins(DefaultPlugins);
+        // Foundation: settings and screen state machine first.
+        app.add_plugins((SettingsPlugin, ScreenPlugin));
+        // Audio (bevy_seedling) must come after DefaultPlugins.
+        app.add_plugins(AudioPlugin);
         app.add_plugins(ClientNetworkPlugin);
         app.add_plugins(SharedPlugin);
         app.add_plugins(GuildPlugin);
-        app.add_plugins((WorldPlugin, ClientPlayerPlugin, CameraPlugin, InventoryPlugin, UiPlugin, chat_plugin));
+        app.add_plugins((
+            WorldPlugin,
+            ClientPlayerPlugin,
+            CameraPlugin,
+            InventoryPlugin,
+            UiPlugin,
+            chat_plugin,
+            GamePlugin,
+        ));
     } else {
         app.add_plugins(DefaultPlugins);
+        app.add_plugins((SettingsPlugin, ScreenPlugin));
+        app.add_plugins(AudioPlugin);
         app.add_plugins((ServerNetworkPlugin, ClientNetworkPlugin));
         app.add_plugins(SharedPlugin);
         app.add_plugins(GuildPlugin);
-        app.add_plugins((WorldPlugin, ClientPlayerPlugin, CameraPlugin, InventoryPlugin, UiPlugin, chat_plugin));
+        app.add_plugins((
+            WorldPlugin,
+            ClientPlayerPlugin,
+            CameraPlugin,
+            InventoryPlugin,
+            UiPlugin,
+            chat_plugin,
+            GamePlugin,
+        ));
         app.add_systems(Startup, server_setup);
     }
 

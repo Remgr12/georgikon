@@ -41,8 +41,7 @@ pub fn init(conn: &Connection) -> Result<()> {
         );",
     )?;
 
-    let item_count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))?;
+    let item_count: i64 = conn.query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0))?;
     if item_count == 0 {
         conn.execute_batch(
             "INSERT INTO items VALUES (1, 'Iron Sword',    0.72, 0.72, 0.82);
@@ -53,8 +52,7 @@ pub fn init(conn: &Connection) -> Result<()> {
         )?;
     }
 
-    let spell_count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM spells", [], |r| r.get(0))?;
+    let spell_count: i64 = conn.query_row("SELECT COUNT(*) FROM spells", [], |r| r.get(0))?;
     if spell_count == 0 {
         conn.execute_batch(
             "INSERT INTO spells (name, key_code, cooldown_secs, color_r, color_g, color_b)
@@ -109,10 +107,18 @@ pub fn load_spells(conn: &Connection) -> Result<Vec<(String, String, f32, f32, f
 /// Parse a stored key string (e.g. `"F1"`) back into a [`KeyCode`].
 pub fn key_code_from_str(s: &str) -> KeyCode {
     match s {
-        "F1"  => KeyCode::F1,  "F2"  => KeyCode::F2,  "F3"  => KeyCode::F3,
-        "F4"  => KeyCode::F4,  "F5"  => KeyCode::F5,  "F6"  => KeyCode::F6,
-        "F7"  => KeyCode::F7,  "F8"  => KeyCode::F8,  "F9"  => KeyCode::F9,
-        "F10" => KeyCode::F10, "F11" => KeyCode::F11, "F12" => KeyCode::F12,
-        _     => KeyCode::F1,
+        "F1" => KeyCode::F1,
+        "F2" => KeyCode::F2,
+        "F3" => KeyCode::F3,
+        "F4" => KeyCode::F4,
+        "F5" => KeyCode::F5,
+        "F6" => KeyCode::F6,
+        "F7" => KeyCode::F7,
+        "F8" => KeyCode::F8,
+        "F9" => KeyCode::F9,
+        "F10" => KeyCode::F10,
+        "F11" => KeyCode::F11,
+        "F12" => KeyCode::F12,
+        _ => KeyCode::F1,
     }
 }
