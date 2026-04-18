@@ -1,6 +1,4 @@
 use bevy::prelude::*;
-use bevy::input::keyboard::KeyboardInput;
-use bevy::input::ButtonState;
 use serde::Deserialize;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Mutex;
@@ -16,7 +14,7 @@ pub struct ChatPlugin {
 struct ChatReceiver(Mutex<Receiver<String>>);
 
 #[derive(Resource)]
-struct ChatSender(Mutex<Sender<String>>); // Send to Zulip
+struct ChatSender(Mutex<Sender<String>>);
 
 #[derive(Component)]
 struct ChatHistoryText;
@@ -59,7 +57,6 @@ impl Plugin for ChatPlugin {
 }
 
 fn setup_chat_ui(mut commands: Commands) {
-    // Basic chat UI at the bottom left
     commands.spawn((
         Node {
             position_type: PositionType::Absolute,
@@ -72,7 +69,6 @@ fn setup_chat_ui(mut commands: Commands) {
         },
         BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.8)),
     )).with_children(|parent| {
-        // Chat History
         parent.spawn((
             Text::new(""),
             TextFont {
@@ -87,7 +83,6 @@ fn setup_chat_ui(mut commands: Commands) {
             ChatHistoryText,
         ));
         
-        // Chat Input
         parent.spawn((
             Text::new("> "),
             TextFont {
@@ -111,7 +106,6 @@ fn receive_chat_messages(
     if let Some(rx) = receiver {
         if let Ok(msg) = rx.0.lock().unwrap().try_recv() {
             for mut text in query.iter_mut() {
-                // Keep only last N lines to prevent massive text layout
                 let mut current = text.0.clone();
                 current.push_str(&msg);
                 current.push('\n');
@@ -163,7 +157,6 @@ fn handle_chat_input(
         }
     }
 
-    // Simplistic text handling for demo
     if state.is_typing {
         for key in keys.get_just_pressed() {
             let text = match key {
@@ -218,7 +211,6 @@ fn handle_chat_input(
             let _ = tx.0.lock().unwrap().send(msg);
         } else {
             println!("Local chat (no Zulip): {}", msg);
-            // Simulate receiving the message locally for testing
             for mut text in query.iter_mut() {
                  let mut current = text.0.clone();
                  current.push_str(&format!("Local: {}", msg));
@@ -238,8 +230,6 @@ fn handle_chat_input(
         }
     }
 }
-
-// -- Zulip Thread --
 
 #[derive(Deserialize, Debug)]
 struct RegisterResponse {
@@ -269,7 +259,6 @@ struct ZulipMessage {
 fn poll_zulip(url: String, email: String, key: String, to_bevy: Sender<String>, from_bevy: Receiver<String>) {
     let client = reqwest::blocking::Client::new();
     
-    // Register Queue
     let reg_res = client.post(&format!("{}/api/v1/register", url))
         .basic_auth(&email, Some(&key))
         .form(&[("event_types", "[\"message\"]")])
@@ -289,24 +278,22 @@ fn poll_zulip(url: String, email: String, key: String, to_bevy: Sender<String>, 
         }
     };
 
-    let mut queue_id = reg.queue_id;
+    let queue_id = reg.queue_id;
     let mut last_event_id = reg.last_event_id;
 
     loop {
-        // Send any queued messages from Bevy
         while let Ok(msg) = from_bevy.try_recv() {
             let _ = client.post(&format!("{}/api/v1/messages", url))
                 .basic_auth(&email, Some(&key))
                 .form(&[
                     ("type", "stream"),
-                    ("to", "georgikon"), // Hardcoded stream name
-                    ("topic", "general"), // Hardcoded topic
+                    ("to", "georgikon"),
+                    ("topic", "general"),
                     ("content", &msg),
                 ])
                 .send();
         }
 
-        // Poll events
         let ev_res = client.get(&format!("{}/api/v1/events", url))
             .basic_auth(&email, Some(&key))
             .query(&[("queue_id", &queue_id), ("last_event_id", &last_event_id.to_string())])

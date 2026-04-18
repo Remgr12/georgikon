@@ -160,7 +160,7 @@ pub struct EquipToHotbarEvent {
 
 fn handle_add_item(
     ev: On<AddItemEvent>,
-    mut query: Query<&mut Inventory, With<crate::player::Player>>,
+    mut query: Query<&mut Inventory, With<crate::client::player::Player>>,
 ) {
     let Ok(mut inventory) = query.single_mut() else { return };
     inventory.add(ev.item_id, ev.quantity);
@@ -169,7 +169,7 @@ fn handle_add_item(
 
 fn handle_remove_item(
     ev: On<RemoveItemEvent>,
-    mut query: Query<(&mut Inventory, &mut Hotbar), With<crate::player::Player>>,
+    mut query: Query<(&mut Inventory, &mut Hotbar), With<crate::client::player::Player>>,
 ) {
     let Ok((mut inventory, mut hotbar)) = query.single_mut() else { return };
 
@@ -194,7 +194,7 @@ fn handle_remove_item(
 
 fn handle_equip_to_hotbar(
     ev: On<EquipToHotbarEvent>,
-    mut query: Query<(&Inventory, &mut Hotbar), With<crate::player::Player>>,
+    mut query: Query<(&Inventory, &mut Hotbar), With<crate::client::player::Player>>,
 ) {
     let Ok((inventory, mut hotbar)) = query.single_mut() else { return };
     if ev.hotbar_slot < HOTBAR_SLOTS && ev.inventory_slot < inventory.slots.len() {
@@ -210,7 +210,7 @@ fn handle_equip_to_hotbar(
 
 fn tick_spell_cooldowns(
     time: Res<Time>,
-    mut query: Query<&mut SpellBook, With<crate::player::Player>>,
+    mut query: Query<&mut SpellBook, With<crate::client::player::Player>>,
 ) {
     let Ok(mut spellbook) = query.single_mut() else { return };
     let dt = time.delta_secs();
@@ -223,7 +223,7 @@ fn tick_spell_cooldowns(
 
 fn handle_spell_cast(
     keys: Res<ButtonInput<KeyCode>>,
-    mut query: Query<&mut SpellBook, With<crate::player::Player>>,
+    mut query: Query<&mut SpellBook, With<crate::client::player::Player>>,
 ) {
     let Ok(mut spellbook) = query.single_mut() else { return };
     for spell in spellbook.spells.iter_mut() {

@@ -1,6 +1,6 @@
 use bevy::prelude::*;
-use crate::inventory::{Hotbar, Inventory, ItemRegistry, SpellBook, HOTBAR_SLOTS};
-use crate::player::Player;
+use crate::common::inventory::{Hotbar, Inventory, ItemRegistry, SpellBook, HOTBAR_SLOTS};
+use crate::client::player::Player;
 
 pub struct UiPlugin;
 

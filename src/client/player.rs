@@ -1,13 +1,13 @@
+use crate::common::inventory::{Hotbar, Inventory, ItemRegistry, Spell, SpellBook};
+use crate::net::{PlayerId, PlayerPosition};
+use crate::server::db;
 use bevy::prelude::*;
 use bevy_third_person_camera::{ThirdPersonCamera, ThirdPersonCameraTarget};
 use lightyear::prelude::Replicate;
-use crate::db;
-use crate::inventory::{Hotbar, Inventory, ItemRegistry, Spell, SpellBook};
-use crate::network::{PlayerId, PlayerPosition};
 
-pub struct PlayerPlugin;
+pub struct ClientPlayerPlugin;
 
-impl Plugin for PlayerPlugin {
+impl Plugin for ClientPlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, (seed_item_registry, spawn_player).chain())
             .add_systems(Update, (
@@ -23,15 +23,11 @@ impl Plugin for PlayerPlugin {
 #[derive(Component)]
 pub struct Player;
 
-/// Simple vertical physics — no full physics engine needed for basic jump.
 #[derive(Component)]
 pub struct Jumper {
     pub velocity_y: f32,
-    /// Initial upward velocity when jumping.
     pub jump_force: f32,
-    /// Gravity acceleration (positive = downward).
     pub gravity: f32,
-    /// Y position of the ground surface (player rests here).
     pub ground_y: f32,
 }
 
@@ -47,8 +43,6 @@ impl Default for Jumper {
 }
 
 const SPEED: f32 = 5.0;
-
-// ── Startup systems ───────────────────────────────────────────────────────────
 
 fn seed_item_registry(mut registry: ResMut<ItemRegistry>) {
     let conn = match db::open() {
@@ -73,7 +67,6 @@ fn spawn_player(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // Load spells from DB; fall back to empty if unavailable.
     let spells: Vec<Spell> = db::open()
         .and_then(|conn| db::load_spells(&conn))
         .map(|rows| {
@@ -90,9 +83,9 @@ fn spawn_player(
         .unwrap_or_else(|e| { error!("Failed to load spells: {e}"); vec![] });
 
     let mut inventory = Inventory::default();
-    inventory.add(1, 1); // Iron Sword
-    inventory.add(2, 5); // Health Potion
-    inventory.add(3, 3); // Mana Potion
+    inventory.add(1, 1);
+    inventory.add(2, 5);
+    inventory.add(3, 3);
 
     let mut hotbar = Hotbar::default();
     hotbar.bindings[0] = Some(0);
@@ -101,7 +94,7 @@ fn spawn_player(
 
     commands.spawn((
         Player,
-        PlayerId(0), // Replaced or managed by server later
+        PlayerId(0),
         PlayerPosition(Vec3::new(0.0, 1.0, 0.0)),
         Replicate::default(),
         ThirdPersonCameraTarget,
@@ -117,8 +110,6 @@ fn spawn_player(
         Transform::from_xyz(0.0, 1.0, 0.0),
     ));
 }
-
-// ── Replication & Remote Players ──────────────────────────────────────────────
 
 fn sync_local_player_position(
     mut query: Query<(&Transform, &mut PlayerPosition), (With<Player>, Changed<Transform>)>,
@@ -146,15 +137,13 @@ fn spawn_remote_players(
         commands.entity(entity).insert((
             Mesh3d(meshes.add(Capsule3d::new(0.5, 1.0))),
             MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::srgb(0.2, 0.2, 0.8), // Blue for remote players
+                base_color: Color::srgb(0.2, 0.2, 0.8),
                 ..default()
             })),
             Transform::from_xyz(0.0, 1.0, 0.0),
         ));
     }
 }
-
-// ── Update systems ────────────────────────────────────────────────────────────
 
 fn move_player(
     keys: Res<ButtonInput<KeyCode>>,
@@ -201,7 +190,6 @@ fn apply_jump(
     jumper.velocity_y -= jumper.gravity * dt;
     transform.translation.y += jumper.velocity_y * dt;
 
-    // Clamp to ground and stop falling.
     if transform.translation.y < jumper.ground_y {
         transform.translation.y = jumper.ground_y;
         jumper.velocity_y = 0.0;
