@@ -16,6 +16,7 @@ use crate::client::camera::SceneCamera;
 use crate::client::input::{ActionState, GameAction};
 use crate::client::player::Player;
 use crate::common::inventory::{HOTBAR_SLOTS, Hotbar, Inventory, ItemRegistry, SpellBook};
+use crate::common::stats::{CharacterStats, EnergyBar, HealthBar, StaminaBar};
 use crate::screens::{GoTo, Screen};
 use crate::settings::Settings;
 
@@ -25,7 +26,7 @@ impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Startup,
-            (spawn_hotbar_ui, spawn_spell_hud, spawn_pause_menu),
+            (spawn_hotbar_ui, spawn_spell_hud, spawn_pause_menu, spawn_stat_bars),
         )
         .add_systems(PostStartup, bind_hud_to_scene_camera)
         .add_systems(
@@ -34,6 +35,7 @@ impl Plugin for UiPlugin {
                 update_hotbar_ui,
                 init_spell_hud_slots,
                 update_spell_hud_state,
+                update_stat_bars,
                 toggle_pause_menu.run_if(in_state(Screen::Gameplay)),
                 handle_pause_buttons,
                 update_volume_labels,
@@ -975,5 +977,88 @@ fn update_movement_labels(
     }
     if let Ok(mut t) = jump.single_mut() {
         t.0 = format!("{:.1}", settings.gameplay.jump_force);
+    }
+}
+
+// ── Stat bars (health / energy / stamina) ────────────────────────────────────
+
+/// Panel at the top-left showing three resource bars.
+fn spawn_stat_bars(mut commands: Commands) {
+    // Outer container: top-left, vertical stack
+    commands.spawn(Node {
+        position_type: PositionType::Absolute,
+        top: Val::Px(12.0),
+        left: Val::Px(12.0),
+        flex_direction: FlexDirection::Column,
+        row_gap: Val::Px(4.0),
+        ..Default::default()
+    }).with_children(|p| {
+        stat_bar_row(p, "HP", Color::srgb(0.8, 0.2, 0.2), HealthBar);
+        stat_bar_row(p, "EP", Color::srgb(0.2, 0.4, 0.9), EnergyBar);
+        stat_bar_row(p, "ST", Color::srgb(0.2, 0.8, 0.4), StaminaBar);
+    });
+}
+
+/// Spawn one labelled bar row.
+fn stat_bar_row<M: Component>(parent: &mut ChildSpawnerCommands, label: &str, color: Color, marker: M) {
+    parent.spawn(Node {
+        flex_direction: FlexDirection::Row,
+        align_items: AlignItems::Center,
+        column_gap: Val::Px(6.0),
+        ..Default::default()
+    }).with_children(|row| {
+        // Label
+        row.spawn((
+            Text(label.to_string()),
+            TextFont { font_size: 11.0, ..Default::default() },
+            TextColor(Color::WHITE),
+            Node { width: Val::Px(20.0), ..Default::default() },
+        ));
+        // Bar background
+        row.spawn((
+            Node {
+                width: Val::Px(120.0),
+                height: Val::Px(8.0),
+                ..Default::default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
+        )).with_children(|bg| {
+            // Filled portion (marker for updates)
+            bg.spawn((
+                marker,
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    ..Default::default()
+                },
+                BackgroundColor(color),
+            ));
+        });
+    });
+}
+
+/// Update bar widths from the local player's `CharacterStats`.
+fn update_stat_bars(
+    player_query: Query<&CharacterStats, With<Player>>,
+    mut health_q: Query<&mut Node, (With<HealthBar>, Without<EnergyBar>, Without<StaminaBar>)>,
+    mut energy_q: Query<&mut Node, (With<EnergyBar>, Without<HealthBar>, Without<StaminaBar>)>,
+    mut stamina_q: Query<&mut Node, (With<StaminaBar>, Without<HealthBar>, Without<EnergyBar>)>,
+) {
+    let Ok(stats) = player_query.single() else {
+        return;
+    };
+
+    let set_bar = |node: &mut Node, fraction: f32| {
+        node.width = Val::Percent((fraction * 100.0).clamp(0.0, 100.0));
+    };
+
+    if let Ok(mut n) = health_q.single_mut() {
+        set_bar(&mut n, stats.health.fraction());
+    }
+    if let Ok(mut n) = energy_q.single_mut() {
+        set_bar(&mut n, stats.energy.fraction());
+    }
+    if let Ok(mut n) = stamina_q.single_mut() {
+        set_bar(&mut n, stats.stamina.fraction());
     }
 }

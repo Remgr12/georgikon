@@ -1,22 +1,11 @@
 use crate::client::input::{ActionState, GameAction};
-use crate::common::social::ChatChannel;
+use crate::common::social::{ChatBroadcastMessage, ChatChannel, ChatNetMessage};
+use crate::net::ReliableChannel;
 use bevy::prelude::*;
-use serde::Deserialize;
-use std::sync::Mutex;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
+use lightyear::prelude::*;
+use lightyear::prelude::client::Client;
 
-pub struct ChatPlugin {
-    pub url: Option<String>,
-    pub email: Option<String>,
-    pub key: Option<String>,
-}
-
-#[derive(Resource)]
-struct ChatReceiver(Mutex<Receiver<String>>);
-
-#[derive(Resource)]
-struct ChatSender(Mutex<Sender<String>>);
+pub struct ChatPlugin;
 
 #[derive(Component)]
 struct ChatHistoryText;
@@ -52,24 +41,8 @@ impl Plugin for ChatPlugin {
             history_cursor_from_end: 0,
         });
 
-        if let (Some(url), Some(email), Some(key)) = (&self.url, &self.email, &self.key) {
-            let (rx_send, rx_recv) = mpsc::channel();
-            let (tx_send, tx_recv) = mpsc::channel();
-
-            app.insert_resource(ChatReceiver(Mutex::new(rx_recv)));
-            app.insert_resource(ChatSender(Mutex::new(tx_send)));
-
-            let url_clone = url.clone();
-            let email_clone = email.clone();
-            let key_clone = key.clone();
-
-            thread::spawn(move || {
-                poll_zulip(url_clone, email_clone, key_clone, rx_send, tx_recv);
-            });
-        }
-
         app.add_systems(Startup, setup_chat_ui);
-        app.add_systems(Update, (receive_chat_messages, handle_chat_input));
+        app.add_systems(Update, (receive_chat_broadcast, handle_chat_input));
     }
 }
 
@@ -103,7 +76,7 @@ fn setup_chat_ui(mut commands: Commands) {
             ));
 
             parent.spawn((
-                Text::new("> "),
+                Text::new("> [Press Enter to chat]"),
                 TextFont {
                     font_size: 16.0,
                     ..default()
@@ -118,24 +91,38 @@ fn setup_chat_ui(mut commands: Commands) {
         });
 }
 
-fn receive_chat_messages(
-    receiver: Option<Res<ChatReceiver>>,
-    mut query: Query<&mut Text, With<ChatHistoryText>>,
+/// Display incoming broadcast messages from the server.
+fn receive_chat_broadcast(
+    mut client_query: Query<&mut MessageReceiver<ChatBroadcastMessage>, With<Client>>,
+    mut history_query: Query<&mut Text, With<ChatHistoryText>>,
 ) {
-    if let Some(rx) = receiver {
-        if let Ok(msg) = rx.0.lock().unwrap().try_recv() {
-            for mut text in query.iter_mut() {
-                let mut current = text.0.clone();
-                current.push_str(&msg);
-                current.push('\n');
+    let Ok(mut receiver) = client_query.single_mut() else {
+        return;
+    };
 
-                let lines: Vec<&str> = current.lines().collect();
-                if lines.len() > 15 {
-                    text.0 = lines[lines.len() - 15..].join("\n") + "\n";
-                } else {
-                    text.0 = current;
-                }
-            }
+    let mut new_lines: Vec<String> = Vec::new();
+    for msg in receiver.receive() {
+        new_lines.push(format!(
+            "[{}] {}: {}",
+            channel_tag(msg.channel),
+            msg.sender_name,
+            msg.body,
+        ));
+    }
+
+    if new_lines.is_empty() {
+        return;
+    }
+
+    for mut text in history_query.iter_mut() {
+        for line in &new_lines {
+            text.0.push_str(line);
+            text.0.push('\n');
+        }
+        // Keep at most 15 lines.
+        let lines: Vec<String> = text.0.lines().map(|l| l.to_string()).collect();
+        if lines.len() > 15 {
+            text.0 = lines[lines.len() - 15..].join("\n") + "\n";
         }
     }
 }
@@ -146,18 +133,21 @@ fn handle_chat_input(
     keys: Res<ButtonInput<KeyCode>>,
     mut input_query: Query<&mut Text, (With<ChatInputText>, Without<ChatHistoryText>)>,
     mut history_query: Query<&mut Text, (With<ChatHistoryText>, Without<ChatInputText>)>,
-    sender: Option<Res<ChatSender>>,
+    mut client_query: Query<&mut MessageSender<ChatNetMessage>, With<Client>>,
 ) {
     let mut update_ui = false;
-    let mut send_msg = None;
+    let mut send_msg: Option<(ChatChannel, String)> = None;
 
     if actions.just_pressed(GameAction::ChatOpenSend) {
         if state.is_typing {
             state.is_typing = false;
             if !state.current_message.is_empty() {
-                let msg = state.current_message.clone();
-                send_msg = Some(msg.clone());
-                state.history.push(msg);
+                let raw = state.current_message.clone();
+                let (channel, body) = parse_chat_command(&raw, state.channel);
+                if !body.is_empty() {
+                    state.history.push(raw);
+                    send_msg = Some((channel, body));
+                }
             }
             state.current_message.clear();
             state.history_cursor_from_end = 0;
@@ -226,27 +216,19 @@ fn handle_chat_input(
         }
     }
 
-    if let Some(raw_msg) = send_msg {
-        let mut outgoing = raw_msg;
-        if outgoing.starts_with('/') {
-            let (channel, rest) = parse_chat_command(&outgoing);
-            state.channel = channel;
-            outgoing = rest;
-            update_ui = true;
-        }
-        if outgoing.is_empty() {
-            return;
-        }
-        let decorated = format!("[{}] {}", channel_tag(state.channel), outgoing);
-        if let Some(tx) = &sender {
-            let _ = tx.0.lock().unwrap().send(decorated.clone());
+    if let Some((channel, body)) = send_msg {
+        // Update channel state for future messages.
+        state.channel = channel;
+
+        // Send via server. Fall back to local echo when not yet connected.
+        if let Ok(mut sender) = client_query.single_mut() {
+            sender.send::<ReliableChannel>(ChatNetMessage { channel, body });
         } else {
-            println!("Local chat (no Zulip): {}", decorated);
+            // Local fallback (no server connection yet, e.g. startup race).
+            let line = format!("[{}] You: {}", channel_tag(channel), body);
             for mut text in history_query.iter_mut() {
-                let mut current = text.0.clone();
-                current.push_str(&format!("You {}", decorated));
-                current.push('\n');
-                text.0 = current;
+                text.0.push_str(&line);
+                text.0.push('\n');
             }
         }
     }
@@ -266,7 +248,9 @@ fn handle_chat_input(
     }
 }
 
-fn parse_chat_command(input: &str) -> (ChatChannel, String) {
+/// Parse `/channel body` prefix commands. Returns `(channel, body)`.
+/// If no prefix matches, returns the current channel and original text.
+fn parse_chat_command(input: &str, current: ChatChannel) -> (ChatChannel, String) {
     if let Some(msg) = input.strip_prefix("/party ") {
         return (ChatChannel::Party, msg.trim().to_string());
     }
@@ -285,10 +269,8 @@ fn parse_chat_command(input: &str) -> (ChatChannel, String) {
             "Commands: /local /party /guild /trade /help".to_string(),
         );
     }
-    (
-        ChatChannel::Local,
-        input.trim_start_matches('/').trim().to_string(),
-    )
+    // No prefix: keep current channel.
+    (current, input.trim().to_string())
 }
 
 fn key_to_char(key: KeyCode) -> Option<char> {
@@ -330,108 +312,5 @@ fn key_to_char(key: KeyCode) -> Option<char> {
         KeyCode::Digit8 => Some('8'),
         KeyCode::Digit9 => Some('9'),
         _ => None,
-    }
-}
-
-#[derive(Deserialize, Debug)]
-struct RegisterResponse {
-    queue_id: String,
-    last_event_id: i64,
-}
-
-#[derive(Deserialize, Debug)]
-struct EventsResponse {
-    events: Vec<ZulipEvent>,
-}
-
-#[derive(Deserialize, Debug)]
-struct ZulipEvent {
-    id: i64,
-    #[serde(rename = "type")]
-    event_type: String,
-    message: Option<ZulipMessage>,
-}
-
-#[derive(Deserialize, Debug)]
-struct ZulipMessage {
-    content: String,
-    sender_full_name: String,
-}
-
-fn poll_zulip(
-    url: String,
-    email: String,
-    key: String,
-    to_bevy: Sender<String>,
-    from_bevy: Receiver<String>,
-) {
-    let client = reqwest::blocking::Client::new();
-
-    let reg_res = client
-        .post(&format!("{}/api/v1/register", url))
-        .basic_auth(&email, Some(&key))
-        .form(&[("event_types", "[\"message\"]")])
-        .send();
-
-    let reg: RegisterResponse = match reg_res {
-        Ok(r) => {
-            if let Ok(json) = r.json() {
-                json
-            } else {
-                return;
-            }
-        }
-        Err(e) => {
-            println!("Failed to register Zulip queue: {:?}", e);
-            return;
-        }
-    };
-
-    let queue_id = reg.queue_id;
-    let mut last_event_id = reg.last_event_id;
-
-    loop {
-        while let Ok(msg) = from_bevy.try_recv() {
-            let _ = client
-                .post(&format!("{}/api/v1/messages", url))
-                .basic_auth(&email, Some(&key))
-                .form(&[
-                    ("type", "stream"),
-                    ("to", "georgikon"),
-                    ("topic", "general"),
-                    ("content", &msg),
-                ])
-                .send();
-        }
-
-        let ev_res = client
-            .get(&format!("{}/api/v1/events", url))
-            .basic_auth(&email, Some(&key))
-            .query(&[
-                ("queue_id", &queue_id),
-                ("last_event_id", &last_event_id.to_string()),
-            ])
-            .send();
-
-        match ev_res {
-            Ok(r) => {
-                if let Ok(json) = r.json::<EventsResponse>() {
-                    for ev in json.events {
-                        if ev.event_type == "message" {
-                            if let Some(msg) = ev.message {
-                                let display = format!("{}: {}", msg.sender_full_name, msg.content);
-                                let _ = to_bevy.send(display);
-                            }
-                        }
-                        last_event_id = last_event_id.max(ev.id);
-                    }
-                } else {
-                    thread::sleep(std::time::Duration::from_secs(1));
-                }
-            }
-            Err(_) => {
-                thread::sleep(std::time::Duration::from_secs(2));
-            }
-        }
     }
 }

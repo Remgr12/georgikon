@@ -14,6 +14,16 @@ pub struct ChatNetMessage {
     pub body: String,
 }
 
+/// Server → All clients: a validated, normalized chat message ready to display.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ChatBroadcastMessage {
+    /// Display name of the sender (server-resolved).
+    pub sender_name: String,
+    pub channel: ChatChannel,
+    /// Normalized body (trimmed, length-capped by server).
+    pub body: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct GroupInviteMessage {
     pub from_player_id: u64,

@@ -94,6 +94,35 @@ impl Inventory {
         }
         removed
     }
+
+    /// Total quantity of `item_id` across all stacks.
+    pub fn total_quantity(&self, item_id: u32) -> u32 {
+        self.slots
+            .iter()
+            .filter(|s| s.item_id == item_id)
+            .map(|s| s.quantity)
+            .sum()
+    }
+
+    /// Remove up to `quantity` of `item_id` by consuming stacks in order.
+    /// Returns the amount actually removed.
+    pub fn remove_by_item_id(&mut self, item_id: u32, quantity: u32) -> u32 {
+        let mut remaining = quantity;
+        let mut i = 0;
+        while i < self.slots.len() && remaining > 0 {
+            if self.slots[i].item_id == item_id {
+                let take = remaining.min(self.slots[i].quantity);
+                self.slots[i].quantity -= take;
+                remaining -= take;
+                if self.slots[i].quantity == 0 {
+                    self.slots.remove(i);
+                    continue; // don't increment i
+                }
+            }
+            i += 1;
+        }
+        quantity - remaining
+    }
 }
 
 // ── Hotbar ────────────────────────────────────────────────────────────────────

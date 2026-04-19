@@ -2,6 +2,7 @@ use tracing::{error, info};
 
 use crate::client::input::{ActionState, GameAction};
 use crate::common::inventory::{Hotbar, Inventory, ItemRegistry, Spell, SpellBook};
+use crate::common::stats::CharacterStats;
 use crate::net::{PlayerId, PlayerPosition};
 use crate::server::db;
 use crate::settings::Settings;
@@ -39,7 +40,7 @@ pub struct MovementState {
 
 #[derive(Component, Default)]
 pub struct CombatState {
-    roll_cooldown: f32,
+    pub roll_cooldown: f32,
 }
 
 impl Default for MovementState {
@@ -117,6 +118,7 @@ fn spawn_player(
             PlayerPosition(Vec3::new(0.0, 1.0, 0.0)),
             MovementState::default(),
             CombatState::default(),
+            CharacterStats::default(),
             inventory,
             hotbar,
             SpellBook { spells },
