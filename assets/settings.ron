@@ -1,0 +1,14 @@
+(
+    sound: (
+        general: 0.8,
+        music: 0.8,
+        sfx: 0.8,
+    ),
+    fov: 60.0,
+    gameplay: (
+        walk_speed: 5.0,
+        sprint_speed: 8.0,
+        jump_force: 7.0,
+        gravity: 20.0,
+    ),
+)
