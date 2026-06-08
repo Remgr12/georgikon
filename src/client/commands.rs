@@ -39,6 +39,7 @@ impl Plugin for ClientCommandPlugin {
                 party_commands,
                 quest_commands,
                 mail_commands,
+                trade_commands,
                 clear_commands,
             )
                 .chain(),
@@ -261,6 +262,68 @@ fn mail_commands(
             "mailread" => {
                 if let (Ok(id), Ok(mut tx)) = (rest.trim().parse::<u64>(), read.single_mut()) {
                     tx.send::<ReliableChannel>(MarkMailReadMessage { mail_id: id });
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn trade_commands(
+    queue: Res<CommandQueue>,
+    mut req: Query<&mut MessageSender<TradeRequestNetMessage>, With<Client>>,
+    mut offer: Query<&mut MessageSender<TradeOfferUpdateMessage>, With<Client>>,
+    mut accept: Query<&mut MessageSender<TradeAcceptMessage>, With<Client>>,
+    mut decline: Query<&mut MessageSender<TradeDeclineMessage>, With<Client>>,
+) {
+    for line in &queue.lines {
+        let (verb, rest) = split(line);
+        match verb {
+            "tradewith" if !rest.is_empty() => {
+                if let Ok(mut tx) = req.single_mut() {
+                    tx.send::<ReliableChannel>(TradeRequestNetMessage {
+                        to_name: rest.into(),
+                    });
+                }
+            }
+            "offer" => {
+                if let Some((id_s, qty_s)) = rest.split_once(char::is_whitespace) {
+                    if let (Ok(item_id), Ok(quantity)) =
+                        (id_s.trim().parse::<u32>(), qty_s.trim().parse::<u32>())
+                    {
+                        if let Ok(mut tx) = offer.single_mut() {
+                            tx.send::<ReliableChannel>(TradeOfferUpdateMessage {
+                                item_id,
+                                quantity,
+                                add: true,
+                            });
+                        }
+                    }
+                }
+            }
+            "unoffer" => {
+                if let Some((id_s, qty_s)) = rest.split_once(char::is_whitespace) {
+                    if let (Ok(item_id), Ok(quantity)) =
+                        (id_s.trim().parse::<u32>(), qty_s.trim().parse::<u32>())
+                    {
+                        if let Ok(mut tx) = offer.single_mut() {
+                            tx.send::<ReliableChannel>(TradeOfferUpdateMessage {
+                                item_id,
+                                quantity,
+                                add: false,
+                            });
+                        }
+                    }
+                }
+            }
+            "tradeok" => {
+                if let Ok(mut tx) = accept.single_mut() {
+                    tx.send::<ReliableChannel>(TradeAcceptMessage);
+                }
+            }
+            "tradeno" => {
+                if let Ok(mut tx) = decline.single_mut() {
+                    tx.send::<ReliableChannel>(TradeDeclineMessage);
                 }
             }
             _ => {}
