@@ -38,6 +38,8 @@ pub enum GameAction {
     ToggleBuild,
     BuildCycle,
     BuildRotate,
+    ToggleMinimap,
+    Interact,
 }
 
 #[derive(Resource)]
@@ -80,6 +82,8 @@ impl ActionMap {
             (KeyCode::KeyB, vec![ToggleBuild]),
             (KeyCode::Tab, vec![BuildCycle]),
             (KeyCode::KeyT, vec![BuildRotate]),
+            (KeyCode::KeyM, vec![ToggleMinimap]),
+            (KeyCode::KeyE, vec![Interact]),
         ])
     }
 }

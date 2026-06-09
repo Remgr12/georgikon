@@ -8,7 +8,7 @@ use crate::client::chat::ChatState;
 use crate::client::input::{ActionState, GameAction};
 use crate::common::mail::{MailActionResultMessage, MailEntry, MailListMessage};
 use crate::common::mob::{UnitKind, UnitVisual};
-use crate::net::{PlayerPosition, TradePhaseNet, TradeStateMessage};
+use crate::net::{TradePhaseNet, TradeStateMessage};
 
 #[derive(Resource, Default)]
 pub struct MailStore {
@@ -251,30 +251,27 @@ fn render_trade(
     }
 }
 
-/// Spawn a colored body for each replicated mob (non-player unit).
+/// Spawn an isometric sprite for each replicated mob (non-player unit).
 fn spawn_mob_visuals(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    q: Query<(Entity, &UnitVisual, &PlayerPosition), Added<UnitVisual>>,
+    q: Query<(Entity, &UnitVisual), Added<UnitVisual>>,
 ) {
-    for (entity, visual, pos) in q.iter() {
+    for (entity, visual) in q.iter() {
         if visual.kind == UnitKind::Player {
             continue;
         }
-        let color = match visual.kind {
-            UnitKind::Wolf => Color::srgb(0.4, 0.4, 0.45),
-            UnitKind::Boar => Color::srgb(0.5, 0.35, 0.25),
-            UnitKind::Player => Color::WHITE,
+        let kind = match visual.kind {
+            UnitKind::Wolf => crate::client::sprite::SpriteKind::Wolf,
+            UnitKind::Boar => crate::client::sprite::SpriteKind::Boar,
+            UnitKind::EliteWolf => crate::client::sprite::SpriteKind::EliteWolf,
+            UnitKind::Player => unreachable!(),
         };
+        // AnimatedSprite tag → SpritePlugin::ensure_sprite_components adds Sprite.
+        // project_iso (PostUpdate) sets Transform from PlayerPosition.
         commands.entity(entity).insert((
             MobVisual,
-            Mesh3d(meshes.add(Capsule3d::new(0.5, 1.0))),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: color,
-                ..default()
-            })),
-            Transform::from_translation(pos.0),
+            crate::client::sprite::AnimatedSprite::new(kind),
+            Transform::default(),
         ));
     }
 }

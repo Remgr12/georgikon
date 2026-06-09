@@ -26,13 +26,31 @@ use crate::server::player_state::{AuthoritativePlayerState, OwnedPlayer, OwnerCo
 #[derive(Component)]
 pub struct Authenticated;
 
+#[derive(Resource)]
+struct AutoSaveTimer(Timer);
+
+impl Default for AutoSaveTimer {
+    fn default() -> Self {
+        Self(Timer::from_seconds(60.0, TimerMode::Repeating))
+    }
+}
+
 pub struct AccountServerPlugin;
 
 impl Plugin for AccountServerPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<OnlinePlayers>();
-        app.add_observer(on_disconnect);
-        app.add_systems(Update, (log_connections, handle_auth));
+        app.init_resource::<OnlinePlayers>()
+            .init_resource::<AutoSaveTimer>()
+            .add_observer(on_disconnect)
+            .add_systems(Startup, init_db)
+            .add_systems(Update, (log_connections, handle_auth, periodic_save));
+    }
+}
+
+fn init_db() {
+    match db::open().and_then(|c| db::init(&c).map(|_| c)) {
+        Ok(_) => tracing::info!("Database initialized"),
+        Err(e) => tracing::error!("Failed to initialize database: {e}"),
     }
 }
 
@@ -56,7 +74,7 @@ fn handle_auth(
     >,
     mut online: ResMut<OnlinePlayers>,
 ) {
-    let conn = match db::open().and_then(|c| db::init(&c).map(|_| c)) {
+    let db_conn = match db::open() {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("DB unavailable for auth: {e}");
@@ -65,7 +83,6 @@ fn handle_auth(
     };
 
     for (conn_entity, mut reg_rx, mut login_rx, mut result_tx) in conn_query.iter_mut() {
-        // Registration requests first (create account, then continue to login).
         let mut attempts: Vec<(String, String, bool)> = Vec::new();
         for m in reg_rx.receive() {
             attempts.push((m.username, m.password, true));
@@ -75,7 +92,7 @@ fn handle_auth(
         }
 
         for (username, password, is_register) in attempts {
-            let result = authenticate(&conn, &username, &password, is_register);
+            let result = authenticate(&db_conn, &username, &password, is_register);
             match result {
                 Ok(character) => {
                     let char_id = character.id as u64;
@@ -89,7 +106,7 @@ fn handle_auth(
                         continue;
                     }
 
-                    let game = spawn_character(&mut commands, &conn, conn_entity, &character);
+                    let game = spawn_character(&mut commands, &db_conn, conn_entity, &character);
 
                     online.insert(
                         char_id,
@@ -112,7 +129,6 @@ fn handle_auth(
                         name: character.name.clone(),
                     });
                     tracing::info!("Login ok: {} (char {})", character.name, char_id);
-                    // Stop after first success for this connection.
                     break;
                 }
                 Err(reason) => {
@@ -175,7 +191,6 @@ fn spawn_character(
     conn_entity: Entity,
     character: &db::CharacterRow,
 ) -> Entity {
-    // Always enter via the overworld (island content is loaded on travel).
     let zone = ZoneId::Overworld;
     let pos = Vec3::new(character.pos[0], 1.0, character.pos[2]);
 
@@ -186,7 +201,6 @@ fn spawn_character(
                 inventory.add(item_id, qty);
             }
         }
-        // First-time characters get a small starter kit.
         _ => {
             inventory.add(1, 1);
             inventory.add(2, 5);
@@ -257,9 +271,30 @@ fn on_disconnect(
         commands.entity(game).despawn();
     }
     online.remove_by_conn(conn_entity);
-    // Notify subsystems (party, …) that need to drop this player.
     commands.trigger(crate::server::online::PlayerLeft(char_id));
     tracing::info!("Player {} disconnected and saved", char_id);
+}
+
+/// Periodically flush all online players to the DB so a crash loses at most 60 s of progress.
+fn periodic_save(
+    time: Res<Time>,
+    mut timer: ResMut<AutoSaveTimer>,
+    online: Res<OnlinePlayers>,
+    query: Query<(&CharacterId, &AuthoritativePlayerState, &Experience, &Inventory, &Zone)>,
+) {
+    if !timer.0.tick(time.delta()).just_finished() {
+        return;
+    }
+    let mut count = 0u32;
+    for (_, entry) in online.iter() {
+        if let Ok((cid, state, exp, inv, zone)) = query.get(entry.game) {
+            persist_character(cid.0, state, exp, inv, zone);
+            count += 1;
+        }
+    }
+    if count > 0 {
+        tracing::info!("Auto-saved {count} online character(s)");
+    }
 }
 
 fn persist_character(
@@ -287,33 +322,33 @@ fn persist_character(
 }
 
 // ---------------------------------------------------------------------------
-// Password hashing
-//
-// NOTE: this is a lightweight salted hash (SipHash via the std `DefaultHasher`)
-// chosen to avoid extra crate dependencies. It is *not* a slow/cryptographic
-// password hash — swap in argon2/bcrypt before any real deployment.
+// Password hashing (Argon2id)
 // ---------------------------------------------------------------------------
 
-use std::hash::{Hash, Hasher};
-
-fn salted_hash(salt: u64, pw: &str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    salt.hash(&mut hasher);
-    pw.hash(&mut hasher);
-    hasher.finish()
-}
+use argon2::{
+    Algorithm, Argon2, Params, Version,
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+};
 
 fn hash_password(pw: &str) -> Option<String> {
-    let salt: u64 = rand::random();
-    Some(format!("{:016x}${:016x}", salt, salted_hash(salt, pw)))
+    let salt = SaltString::generate(&mut OsRng);
+    // Fast params (m=64KB t=1 p=1) for dev: ~3ms vs ~800ms for defaults.
+    // For a production game with real user data, increase m to ≥65536.
+    let params = Params::new(64, 1, 1, None).expect("valid argon2 params");
+    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    argon
+        .hash_password(pw.as_bytes(), &salt)
+        .ok()
+        .map(|h| h.to_string())
 }
 
 fn verify_password(pw: &str, stored: &str) -> bool {
-    let Some((salt_hex, hash_hex)) = stored.split_once('$') else {
+    let Ok(parsed) = PasswordHash::new(stored) else {
         return false;
     };
-    let Ok(salt) = u64::from_str_radix(salt_hex, 16) else {
-        return false;
-    };
-    format!("{:016x}", salted_hash(salt, pw)) == hash_hex
+    // Argon2 reads the params from the stored hash, so verification always uses
+    // the correct params regardless of what's set here.
+    Argon2::default()
+        .verify_password(pw.as_bytes(), &parsed)
+        .is_ok()
 }

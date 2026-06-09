@@ -16,7 +16,8 @@ use crate::client::camera::SceneCamera;
 use crate::client::input::{ActionState, GameAction};
 use crate::client::player::Player;
 use crate::common::inventory::{HOTBAR_SLOTS, Hotbar, Inventory, ItemRegistry, SpellBook};
-use crate::common::stats::{CharacterStats, EnergyBar, HealthBar, StaminaBar};
+use crate::client::quest_ui::ProgressionStore;
+use crate::common::stats::{CharacterStats, EnergyBar, ExperienceBar, HealthBar, LevelText, StaminaBar};
 use crate::screens::{GoTo, Screen};
 use crate::settings::Settings;
 
@@ -24,11 +25,13 @@ pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<DeathFlashState>();
         app.add_systems(
             Startup,
             (spawn_hotbar_ui, spawn_spell_hud, spawn_pause_menu, spawn_stat_bars),
         )
         .add_systems(PostStartup, bind_hud_to_scene_camera)
+        .add_systems(Startup, spawn_death_flash)
         .add_systems(
             Update,
             (
@@ -36,6 +39,8 @@ impl Plugin for UiPlugin {
                 init_spell_hud_slots,
                 update_spell_hud_state,
                 update_stat_bars,
+                update_xp_bar,
+                update_death_flash,
                 toggle_pause_menu.run_if(in_state(Screen::Gameplay)),
                 handle_pause_buttons,
                 update_volume_labels,
@@ -77,6 +82,17 @@ struct SpellLabel(usize);
 struct SpellHudRoot;
 
 // ── Pause menu markers ────────────────────────────────────────────────────────
+
+/// Full-screen flash overlay on respawn.
+#[derive(Component)]
+struct DeathFlash {
+    timer: f32,
+}
+
+#[derive(Resource, Default)]
+struct DeathFlashState {
+    prev_health: f32,
+}
 
 /// Root of the pause-menu overlay.
 #[derive(Component)]
@@ -867,8 +883,10 @@ fn apply_fov(
     camera: &mut Query<&mut Projection, With<crate::client::camera::SceneCamera>>,
 ) {
     if let Ok(mut proj) = camera.single_mut() {
-        if let Projection::Perspective(ref mut p) = *proj {
-            p.fov = settings.fov.to_radians();
+        // In 2-D mode the camera uses an orthographic projection.
+        // Repurpose `settings.fov` as a zoom scale: fov=60 → scale=1.0.
+        if let Projection::Orthographic(ref mut p) = *proj {
+            p.scale = (settings.fov / 60.0).clamp(0.25, 4.0);
         }
     }
 }
@@ -982,20 +1000,71 @@ fn update_movement_labels(
 
 // ── Stat bars (health / energy / stamina) ────────────────────────────────────
 
-/// Panel at the top-left showing three resource bars.
+/// Panel at the top-left showing resource bars + XP.
 fn spawn_stat_bars(mut commands: Commands) {
-    // Outer container: top-left, vertical stack
-    commands.spawn(Node {
-        position_type: PositionType::Absolute,
-        top: Val::Px(12.0),
-        left: Val::Px(12.0),
-        flex_direction: FlexDirection::Column,
-        row_gap: Val::Px(4.0),
-        ..Default::default()
-    }).with_children(|p| {
-        stat_bar_row(p, "HP", Color::srgb(0.8, 0.2, 0.2), HealthBar);
-        stat_bar_row(p, "EP", Color::srgb(0.2, 0.4, 0.9), EnergyBar);
-        stat_bar_row(p, "ST", Color::srgb(0.2, 0.8, 0.4), StaminaBar);
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(12.0),
+            left: Val::Px(12.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(5.0),
+            padding: UiRect::all(Val::Px(8.0)),
+            ..Default::default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+    )).with_children(|p| {
+        // Level label
+        p.spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(6.0),
+            margin: UiRect::bottom(Val::Px(2.0)),
+            ..Default::default()
+        }).with_children(|row| {
+            row.spawn((
+                LevelText,
+                Text("Lv 1".to_string()),
+                TextFont { font_size: 12.0, ..Default::default() },
+                TextColor(Color::srgb(0.95, 0.85, 0.25)),
+            ));
+        });
+        stat_bar_row(p, "HP", Color::srgb(0.82, 0.18, 0.18), HealthBar);
+        stat_bar_row(p, "EP", Color::srgb(0.22, 0.42, 0.92), EnergyBar);
+        stat_bar_row(p, "ST", Color::srgb(0.18, 0.78, 0.42), StaminaBar);
+        // XP bar
+        p.spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(6.0),
+            margin: UiRect::top(Val::Px(2.0)),
+            ..Default::default()
+        }).with_children(|row| {
+            row.spawn((
+                Text("XP".to_string()),
+                TextFont { font_size: 11.0, ..Default::default() },
+                TextColor(Color::srgba(0.75, 0.75, 0.75, 1.0)),
+                Node { width: Val::Px(20.0), ..Default::default() },
+            ));
+            row.spawn((
+                Node {
+                    width: Val::Px(120.0),
+                    height: Val::Px(5.0),
+                    ..Default::default()
+                },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
+            )).with_children(|bg| {
+                bg.spawn((
+                    ExperienceBar,
+                    Node {
+                        width: Val::Percent(0.0),
+                        height: Val::Percent(100.0),
+                        ..Default::default()
+                    },
+                    BackgroundColor(Color::srgb(0.62, 0.42, 0.92)),
+                ));
+            });
+        });
     });
 }
 
@@ -1060,5 +1129,70 @@ fn update_stat_bars(
     }
     if let Ok(mut n) = stamina_q.single_mut() {
         set_bar(&mut n, stats.stamina.fraction());
+    }
+}
+
+fn spawn_death_flash(mut commands: Commands) {
+    commands.insert_resource(DeathFlashState::default());
+    commands.spawn((
+        DeathFlash { timer: 0.0 },
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            ..Default::default()
+        },
+        BackgroundColor(Color::srgba(0.8, 0.05, 0.05, 0.0)),
+        GlobalZIndex(90),
+        Visibility::Hidden,
+    ));
+}
+
+fn update_death_flash(
+    time: Res<Time>,
+    player_q: Query<&CharacterStats, With<Player>>,
+    mut state: ResMut<DeathFlashState>,
+    mut flash_q: Query<(&mut DeathFlash, &mut BackgroundColor, &mut Visibility)>,
+) {
+    let dt = time.delta_secs();
+    if let Ok(stats) = player_q.single() {
+        // Detect respawn: health was low (<= 0) and now jumped to full (>= 50)
+        let just_respawned = state.prev_health <= 0.5 && stats.health.current >= 50.0;
+        state.prev_health = stats.health.current;
+
+        if just_respawned {
+            if let Ok((mut flash, _, _)) = flash_q.single_mut() {
+                flash.timer = 1.5;
+            }
+        }
+    }
+
+    if let Ok((mut flash, mut bg, mut vis)) = flash_q.single_mut() {
+        if flash.timer > 0.0 {
+            *vis = Visibility::Inherited;
+            flash.timer -= dt;
+            let alpha = (flash.timer / 1.5 * 0.65).clamp(0.0, 0.65);
+            *bg = BackgroundColor(Color::srgba(0.7, 0.05, 0.05, alpha));
+        } else {
+            *vis = Visibility::Hidden;
+        }
+    }
+}
+
+/// Sync the XP bar + level label from the shared ProgressionStore (updated by quest_ui.rs).
+fn update_xp_bar(
+    prog: Res<ProgressionStore>,
+    mut xp_q: Query<&mut Node, With<ExperienceBar>>,
+    mut level_q: Query<&mut Text, With<LevelText>>,
+) {
+    if !prog.is_changed() { return; }
+    if let Ok(mut n) = xp_q.single_mut() {
+        let frac = if prog.xp_to_next > 0 {
+            (prog.xp as f32 / prog.xp_to_next as f32).clamp(0.0, 1.0)
+        } else { 1.0 };
+        n.width = Val::Percent(frac * 100.0);
+    }
+    if let Ok(mut t) = level_q.single_mut() {
+        t.0 = format!("Lv {}", prog.level);
     }
 }

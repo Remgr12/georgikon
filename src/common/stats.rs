@@ -141,6 +141,12 @@ pub struct EnergyBar;
 #[derive(Component)]
 pub struct StaminaBar;
 
+#[derive(Component)]
+pub struct ExperienceBar;
+
+#[derive(Component)]
+pub struct LevelText;
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

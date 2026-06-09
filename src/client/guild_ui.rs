@@ -112,9 +112,13 @@ fn recv_invite(
 fn recv_result(
     mut store: ResMut<GuildStore>,
     mut q: Query<&mut MessageReceiver<GuildActionResultMessage>, With<Client>>,
+    mut toasts: ResMut<crate::client::quest_ui::ToastQueue>,
 ) {
     if let Ok(mut rx) = q.single_mut() {
         for msg in rx.receive() {
+            if !msg.message.is_empty() {
+                toasts.push(msg.message.clone(), 3.0);
+            }
             store.last_message = msg.message;
         }
     }

@@ -15,7 +15,8 @@ use audio::AudioPlugin;
 use client::{
     BuildPlugin, CameraPlugin, ChatPlugin, ClientCommandPlugin, ClientPlayerPlugin,
     ClientPredictionPlugin, ClientReconciliationPlugin, GuildClientPlugin, InputPlugin, LoginPlugin,
-    PartyClientPlugin, QuestClientPlugin, SocialClientPlugin, UiPlugin, WorldPlugin,
+    MinimapPlugin, PartyClientPlugin, QuestClientPlugin, SocialClientPlugin, SpritePlugin, UiPlugin,
+    WorldPlugin,
 };
 use common::inventory::InventoryPlugin;
 use game::GamePlugin;
@@ -104,22 +105,27 @@ fn add_server_gameplay_plugins(app: &mut App) {
 /// All client-side rendering / UI / prediction plugins (client + combined modes).
 fn add_client_plugins(app: &mut App) {
     app.add_plugins((
+        SpritePlugin, // must come first so SpriteAssets is ready for other plugins
         WorldPlugin,
         ClientPlayerPlugin,
         CameraPlugin,
         InventoryPlugin,
         UiPlugin,
+        MinimapPlugin,
         ChatPlugin,
         GamePlugin,
         LoginPlugin,
+    ));
+    app.add_plugins((
         GuildClientPlugin,
         PartyClientPlugin,
         BuildPlugin,
         QuestClientPlugin,
         SocialClientPlugin,
         ClientCommandPlugin,
+        ClientPredictionPlugin,
+        ClientReconciliationPlugin,
     ));
-    app.add_plugins((ClientPredictionPlugin, ClientReconciliationPlugin));
 }
 
 fn server_setup() {

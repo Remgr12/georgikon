@@ -4,22 +4,18 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+argon2 = { version = "0.5", features = ["password-hash"] }
 base64 = "0.22.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter"] }
 bevy = { version = "0.18.1", default-features = false, features = [
-    "3d",
+    "2d",
     "default_font",
-    "hdr",
-    "ktx2",
     "multi_threaded",
     "png",
-    "smaa_luts",
-    "tonemapping_luts",
     "vorbis",
     "wayland",
     "x11",
-    "zstd_rust",
 ] }
 bevy_seedling = { version = "0.7", features = ["hrtf"] }
 #bevy_third_person_camera = "0.4.0"

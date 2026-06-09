@@ -3,7 +3,9 @@ use lightyear::prelude::*;
 use lightyear::prelude::server::ClientOf;
 
 use crate::common::combat::{apply_cost, can_perform};
+use crate::common::mob::UnitVisual;
 use crate::common::stats::CharacterStats;
+use crate::common::zone::{Zone, ZoneId};
 use crate::net::{
     CharacterId, CombatIntentKind, CombatIntentMessage, CombatStateMessage, MovementIntentMessage,
     PlayerPosition, PlayerSnapshotMessage, ReliableChannel, UnreliableChannel,
@@ -120,6 +122,40 @@ fn send_snapshots(
     }
 }
 
+/// Respawn any player whose health has hit zero: teleport to spawn, restore stats.
+fn respawn_dead_players(
+    mut players: Query<
+        (&mut AuthoritativePlayerState, &mut CharacterStats, &mut Zone),
+        With<crate::server::player_state::OwnerConn>,
+    >,
+) {
+    for (mut state, mut stats, mut zone) in &mut players {
+        if stats.health.current <= 0.0 {
+            state.position = Vec3::new(0.0, 1.0, 0.0);
+            state.velocity_y = 0.0;
+            stats.health.restore_full();
+            stats.energy.restore_full();
+            stats.stamina.restore_full();
+            zone.0 = ZoneId::Overworld;
+            tracing::info!("Player respawned at origin");
+        }
+    }
+}
+
+/// Keep replicated UnitVisual health in sync with CharacterStats every frame.
+fn sync_unit_visual_health(
+    mut q: Query<(&CharacterStats, &mut UnitVisual), Changed<CharacterStats>>,
+) {
+    for (stats, mut visual) in &mut q {
+        if (visual.health - stats.health.current).abs() > 0.01
+            || (visual.max_health - stats.health.max).abs() > 0.01
+        {
+            visual.health = stats.health.current;
+            visual.max_health = stats.health.max;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Plugin
 // ---------------------------------------------------------------------------
@@ -133,7 +169,9 @@ impl Plugin for ServerAuthorityPlugin {
             (
                 receive_movement_intents,
                 receive_combat_intents,
+                respawn_dead_players,
                 send_snapshots,
+                sync_unit_visual_health,
             )
                 .chain(),
         );

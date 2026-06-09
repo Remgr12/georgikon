@@ -59,12 +59,12 @@ fn load_defs(mut defs: ResMut<QuestDefs>) {
     }
 }
 
-/// kill-objective target id → mob kind.
-fn target_kind(target_id: u32) -> Option<UnitKind> {
+/// kill-objective target id → mob kind(s) that satisfy it.
+fn target_matches(target_id: u32, killed: UnitKind) -> bool {
     match target_id {
-        1 => Some(UnitKind::Wolf),
-        2 => Some(UnitKind::Boar),
-        _ => None,
+        1 => matches!(killed, UnitKind::Wolf | UnitKind::EliteWolf), // wolves + elite count
+        2 => killed == UnitKind::Boar,
+        _ => false,
     }
 }
 
@@ -267,7 +267,7 @@ fn on_mob_killed(
             continue;
         };
         for (idx, obj) in objs.iter().enumerate() {
-            if obj.kind == "kill" && target_kind(obj.target_id) == Some(ev.kind) {
+            if obj.kind == "kill" && target_matches(obj.target_id, ev.kind) {
                 if idx < run.counts.len() && run.counts[idx] < obj.required {
                     run.counts[idx] += 1;
                     changed = true;
@@ -285,9 +285,9 @@ fn on_mob_killed(
             persist_run(ev.killer_char, *qid, run);
         }
     }
-    if changed {
-        outbox.dirty.insert(ev.killer_char);
-    }
+    // Always rebuild quest log after a kill so collect-quest counts (refreshed
+    // from the updated inventory in flush_quest_log→build_log) stay current.
+    outbox.dirty.insert(ev.killer_char);
 }
 
 fn flush_quest_log(

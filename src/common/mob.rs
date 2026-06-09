@@ -13,6 +13,8 @@ pub enum UnitKind {
     Player,
     Wolf,
     Boar,
+    /// Rare elite variant of wolf — stronger and drops more loot.
+    EliteWolf,
 }
 
 impl UnitKind {
@@ -21,6 +23,7 @@ impl UnitKind {
             UnitKind::Player => "Player",
             UnitKind::Wolf => "Wolf",
             UnitKind::Boar => "Boar",
+            UnitKind::EliteWolf => "Alpha Wolf",
         }
     }
 }

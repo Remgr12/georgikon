@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
-use crate::client::camera::SceneCamera;
 use crate::client::input::{ActionState, GameAction};
+use crate::client::iso::{ISO_FORWARD, ISO_RIGHT};
 use crate::client::player::{CombatState, Player};
 use crate::net::{
     CombatIntentKind, CombatIntentMessage, MovementIntentMessage, ReliableChannel,
@@ -14,28 +14,20 @@ use crate::server::sim::ROLL_COOLDOWN_SECS;
 // Systems
 // ---------------------------------------------------------------------------
 
-/// Read local input, compute world-space movement direction, and send a
-/// `MovementIntentMessage` to the server every frame.
+/// Read local input, compute world-space movement direction using the fixed
+/// isometric basis (no camera involved), and send a
+/// [`MovementIntentMessage`] to the server every frame.
 ///
-/// The client still moves its own `Player` entity via `move_player` for
-/// prediction; this system only keeps the server informed.
+/// The axis values `[n.x, n.z]` are identical to what the 3-D camera code
+/// used to send, so the server needs no changes.
 fn send_movement_intent(
     action_state: Res<ActionState>,
-    camera_query: Query<&Transform, (With<SceneCamera>, Without<Player>)>,
     mut sender_query: Query<&mut MessageSender<MovementIntentMessage>, With<Client>>,
 ) {
-    let Ok(mut sender) = sender_query.single_mut() else {
-        return;
-    };
-    let Ok(cam_transform) = camera_query.single() else {
-        return;
-    };
+    let Ok(mut sender) = sender_query.single_mut() else { return };
 
-    // Project camera basis onto the XZ plane (world space).
-    let cam_fwd = cam_transform.forward();
-    let cam_right = cam_transform.right();
-    let forward = Vec3::new(cam_fwd.x, 0.0, cam_fwd.z).normalize_or_zero();
-    let right = Vec3::new(cam_right.x, 0.0, cam_right.z).normalize_or_zero();
+    let forward = ISO_FORWARD.normalize_or_zero();
+    let right = ISO_RIGHT.normalize_or_zero();
 
     let raw = action_state.movement_axis();
     let world_dir = forward * raw.y + right * raw.x;
@@ -61,12 +53,8 @@ fn send_combat_intent(
     mut sender_query: Query<&mut MessageSender<CombatIntentMessage>, With<Client>>,
     mut combat_q: Query<&mut CombatState, With<Player>>,
 ) {
-    let Ok(mut sender) = sender_query.single_mut() else {
-        return;
-    };
-    let Ok(mut state) = combat_q.single_mut() else {
-        return;
-    };
+    let Ok(mut sender) = sender_query.single_mut() else { return };
+    let Ok(mut state) = combat_q.single_mut() else { return };
 
     // Roll: local cooldown gates intent to avoid spamming the server.
     if action_state.just_pressed(GameAction::Roll) && state.roll_cooldown <= 0.0 {

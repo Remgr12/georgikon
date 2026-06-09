@@ -1,0 +1,1 @@
+/home/remgr/Repositories/georgikon/launcher/target/release/georgikon-launcher: /home/remgr/Repositories/georgikon/launcher/src/app.rs /home/remgr/Repositories/georgikon/launcher/src/config.rs /home/remgr/Repositories/georgikon/launcher/src/game.rs /home/remgr/Repositories/georgikon/launcher/src/main.rs /home/remgr/Repositories/georgikon/launcher/src/news.rs

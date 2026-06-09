@@ -8,6 +8,7 @@ use lightyear::prelude::MessageSender;
 use crate::common::quest::ProgressionMessage;
 use crate::common::stats::{CharacterStats, Experience};
 use crate::net::ReliableChannel;
+use crate::server::db;
 use crate::server::online::OnlinePlayers;
 use crate::server::player_state::OwnerConn;
 
@@ -48,6 +49,10 @@ fn on_award_xp(
         stats.health.max += HEALTH_PER_LEVEL * gained as f32;
         stats.health.restore_full();
         tracing::info!("Char {} reached level {}", ev.char_id, exp.level);
+    }
+    // Persist XP immediately so a crash doesn't lose progress.
+    if let Ok(conn) = db::open() {
+        let _ = db::save_character_xp(&conn, ev.char_id as i64, exp.level as i64, exp.xp as i64);
     }
     if let Some(conn) = online.conn_of(ev.char_id) {
         if let Ok(mut tx) = tx_q.get_mut(conn) {

@@ -12,7 +12,9 @@ use std::f32::consts::PI;
 
 use crate::client::chat::ChatState;
 use crate::client::input::{ActionState, GameAction};
+use crate::client::iso::{ISO_FORWARD, world_to_transform};
 use crate::client::player::Player;
+use crate::client::sprite::{AnimatedSprite, SpriteAssets, SpriteKind};
 use crate::client::world::CurrentZone;
 use crate::common::island::{
     IslandObjectInfo, PlaceObjectMessage, PrefabCatalogMessage, PrefabInfo, RemoveObjectMessage,
@@ -74,10 +76,7 @@ fn spawn_build_hud(mut commands: Commands) {
         .with_children(|p| {
             p.spawn((
                 Text::new(""),
-                TextFont {
-                    font_size: 15.0,
-                    ..default()
-                },
+                TextFont { font_size: 15.0, ..default() },
                 TextColor(Color::srgb(0.6, 0.9, 1.0)),
                 BuildHudText,
             ));
@@ -100,12 +99,11 @@ fn recv_catalog(
     }
 }
 
-/// Spawn a colored mesh for each replicated island object.
+/// Spawn an isometric sprite for each replicated island object.
 fn spawn_island_visuals(
     mut commands: Commands,
     store: Res<PrefabStore>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    assets: Res<SpriteAssets>,
     q: Query<(Entity, &IslandObjectInfo, &PlayerPosition), Added<IslandObjectInfo>>,
 ) {
     for (entity, info, pos) in q.iter() {
@@ -114,20 +112,27 @@ fn spawn_island_visuals(
             .get(&info.prefab_id)
             .map(|p| (p.color, p.size))
             .unwrap_or(([0.7, 0.7, 0.7], [1.0, 1.0, 1.0]));
-        let mesh = meshes.add(Cuboid::new(size[0], size[1], size[2]));
-        let mat = materials.add(StandardMaterial {
-            base_color: Color::srgb(color[0], color[1], color[2]),
-            ..default()
-        });
-        let mut transform =
-            Transform::from_translation(pos.0 + Vec3::new(0.0, size[1] * 0.5, 0.0));
-        transform.rotation = Quat::from_rotation_y(info.rot_y);
-        transform.scale = Vec3::splat(info.scale);
+
+        // Scale the visual size from world units to screen pixels.
+        let screen_w = size[0] * crate::client::iso::TILE_HALF_W * 2.0;
+        let screen_h = size[1] * crate::client::iso::Y_LIFT;
+
         commands.entity(entity).insert((
             IslandObjectVisual,
-            Mesh3d(mesh),
-            MeshMaterial3d(mat),
-            transform,
+            AnimatedSprite::new(SpriteKind::IslandProp),
+            // Bypass ensure_sprite_components for per-instance colour tinting.
+            Sprite {
+                image: assets.white.clone(),
+                texture_atlas: Some(TextureAtlas {
+                    layout: assets.layout(SpriteKind::IslandProp),
+                    index: 0,
+                }),
+                custom_size: Some(Vec2::new(screen_w.max(16.0), screen_h.max(16.0))),
+                color: Color::srgb(color[0], color[1], color[2]),
+                ..default()
+            },
+            // project_iso (PostUpdate) will overwrite this each frame.
+            world_to_transform(pos.0),
         ));
     }
 }
@@ -137,9 +142,7 @@ fn toggle_build(
     chat: Res<ChatState>,
     mut build: ResMut<BuildMode>,
 ) {
-    if chat.is_typing {
-        return;
-    }
+    if chat.is_typing { return; }
     if actions.just_pressed(GameAction::ToggleBuild) {
         build.active = !build.active;
     }
@@ -157,25 +160,21 @@ fn build_actions(
     mouse: Res<ButtonInput<MouseButton>>,
     store: Res<PrefabStore>,
     current: Res<CurrentZone>,
-    player_q: Query<&Transform, With<Player>>,
-    objects_q: Query<(&IslandObjectInfo, &Transform)>,
+    // Use world-space PlayerPosition (not screen-space Transform).
+    player_q: Query<&PlayerPosition, With<Player>>,
+    objects_q: Query<(&IslandObjectInfo, &PlayerPosition), Without<Player>>,
     mut place_tx: Query<&mut MessageSender<PlaceObjectMessage>, With<Client>>,
     mut remove_tx: Query<&mut MessageSender<RemoveObjectMessage>, With<Client>>,
 ) {
-    if !build.active || chat.is_typing || store.ordered.is_empty() {
-        return;
-    }
-    let ZoneId::GuildIsland(guild_id) = current.0 else {
-        return;
-    };
-    let Ok(player) = player_q.single() else {
-        return;
-    };
+    if !build.active || chat.is_typing || store.ordered.is_empty() { return; }
+    let ZoneId::GuildIsland(guild_id) = current.0 else { return; };
+    let Ok(player_pos) = player_q.single() else { return; };
 
     if mouse.just_pressed(MouseButton::Left) {
         let prefab_id = store.ordered[build.selected % store.ordered.len()];
-        let fwd = player.forward();
-        let target = player.translation + Vec3::new(fwd.x, 0.0, fwd.z).normalize_or_zero() * 4.0;
+        // Place 4 world units in the iso-forward direction from the player.
+        let fwd = ISO_FORWARD.normalize_or_zero();
+        let target = player_pos.0 + fwd * 4.0;
         let pos = [target.x, 0.0, target.z];
         if let Ok(mut tx) = place_tx.single_mut() {
             tx.send::<ReliableChannel>(PlaceObjectMessage {
@@ -189,10 +188,10 @@ fn build_actions(
     }
 
     if mouse.just_pressed(MouseButton::Right) {
-        // Remove the nearest island object to the player.
+        // Remove the nearest island object (world-space distance).
         let mut nearest: Option<(u64, f32)> = None;
-        for (info, t) in objects_q.iter() {
-            let d = t.translation.distance(player.translation);
+        for (info, obj_pos) in objects_q.iter() {
+            let d = obj_pos.0.distance(player_pos.0);
             if nearest.map_or(true, |(_, bd)| d < bd) {
                 nearest = Some((info.object_id, d));
             }
@@ -212,12 +211,8 @@ fn render_build_hud(
     store: Res<PrefabStore>,
     mut q: Query<&mut Text, With<BuildHudText>>,
 ) {
-    if !build.is_changed() && !store.is_changed() {
-        return;
-    }
-    let Ok(mut text) = q.single_mut() else {
-        return;
-    };
+    if !build.is_changed() && !store.is_changed() { return; }
+    let Ok(mut text) = q.single_mut() else { return; };
     if build.active {
         let name = store
             .ordered

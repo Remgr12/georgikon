@@ -1,23 +1,24 @@
 use tracing::{error, info};
 
 use crate::client::input::{ActionState, GameAction};
+use crate::client::iso::{ISO_FORWARD, ISO_RIGHT, REST_Y};
 use crate::client::login::LocalCharacter;
+use crate::client::sprite::{AnimatedSprite, SpriteKind};
 use crate::common::inventory::{Hotbar, Inventory, ItemRegistry, Spell, SpellBook};
 use crate::common::stats::CharacterStats;
 use crate::net::{CharacterId, PlayerId, PlayerPosition};
+use crate::game::mood::{ChangeMood, Mood};
 use crate::screens::Screen;
 use crate::server::db;
 use crate::settings::Settings;
 use bevy::prelude::*;
 
-use crate::client::camera::SceneCamera;
-
 pub struct ClientPlayerPlugin;
 
 impl Plugin for ClientPlayerPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<CombatMoodTimer>();
         app.add_systems(Startup, seed_item_registry)
-            // Spawn the local player only once we enter gameplay (post-login).
             .add_systems(OnEnter(Screen::Gameplay), spawn_player)
             .add_systems(
                 Update,
@@ -25,11 +26,12 @@ impl Plugin for ClientPlayerPlugin {
                     move_player,
                     apply_jump,
                     handle_combat_input,
-                    sync_local_player_position,
+                    update_player_flash,
+                    update_combat_mood,
                 )
                     .run_if(in_state(Screen::Gameplay)),
             )
-            .add_systems(Update, (sync_remote_player_position, spawn_remote_players));
+            .add_systems(Update, spawn_remote_players);
     }
 }
 
@@ -47,43 +49,34 @@ pub struct CombatState {
     pub roll_cooldown: f32,
 }
 
+/// Tracks time since last damage for mood switching.
+#[derive(Resource, Default)]
+pub struct CombatMoodTimer {
+    pub since_hit: f32,
+}
+
+/// Tracks visual flash timers for the local player sprite.
+#[derive(Component, Default)]
+pub struct PlayerFlash {
+    /// Orange flash on attack (seconds remaining).
+    pub attack: f32,
+    /// Red flash on taking a hit (seconds remaining).
+    pub hurt: f32,
+    /// Previous health for detecting damage.
+    pub prev_health: f32,
+}
+
 impl Default for MovementState {
     fn default() -> Self {
-        Self {
-            velocity_y: 0.0,
-            sprinting: false,
-        }
+        Self { velocity_y: 0.0, sprinting: false }
     }
 }
 
-const GROUND_Y: f32 = 1.0;
-const PLAYER_MESH_OFFSET_Y: f32 = -1.0;
-
-fn seed_item_registry(mut registry: ResMut<ItemRegistry>) {
-    let conn = match db::open() {
-        Ok(c) => c,
-        Err(e) => {
-            error!("DB open failed: {e}");
-            return;
-        }
-    };
-    if let Err(e) = db::init(&conn) {
-        error!("DB init failed: {e}");
-        return;
-    }
-    match db::load_items(&conn) {
-        Ok(rows) => {
-            for (id, name, r, g, b) in rows {
-                registry.register(id, name, Color::srgb(r, g, b));
-            }
-        }
-        Err(e) => error!("Failed to load items: {e}"),
-    }
-}
+/// World Y at which the player rests on the ground.
+const GROUND_Y: f32 = REST_Y;
 
 fn spawn_player(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     local: Res<LocalCharacter>,
     existing: Query<(), With<Player>>,
 ) {
@@ -121,95 +114,62 @@ fn spawn_player(
     hotbar.bindings[1] = Some(1);
     hotbar.bindings[2] = Some(2);
 
-    let player_scene = asset_server.load("player.glb#Scene0");
+    let start_pos = Vec3::new(0.0, GROUND_Y, 0.0);
 
-    commands
-        .spawn((
-            Player,
-            PlayerId(local.id),
-            CharacterId(local.id),
-            PlayerPosition(Vec3::new(0.0, 1.0, 0.0)),
-            MovementState::default(),
-            CombatState::default(),
-            CharacterStats::default(),
-            inventory,
-            hotbar,
-            SpellBook { spells },
-            Transform::from_xyz(0.0, 1.0, 0.0),
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                SceneRoot(player_scene),
-                Transform::from_xyz(0.0, PLAYER_MESH_OFFSET_Y, 0.0),
-            ));
-        });
+    commands.spawn((
+        Player,
+        PlayerId(local.id),
+        CharacterId(local.id),
+        PlayerPosition(start_pos),
+        MovementState::default(),
+        CombatState::default(),
+        CharacterStats::default(),
+        PlayerFlash::default(),
+        inventory,
+        hotbar,
+        SpellBook { spells },
+        AnimatedSprite::new(SpriteKind::Player),
+        crate::client::iso::world_to_transform(start_pos),
+    ));
 }
 
-fn sync_local_player_position(
-    mut query: Query<(&Transform, &mut PlayerPosition), (With<Player>, Changed<Transform>)>,
-) {
-    for (transform, mut player_pos) in query.iter_mut() {
-        player_pos.0 = transform.translation;
-    }
-}
-
-fn sync_remote_player_position(
-    mut query: Query<(&PlayerPosition, &mut Transform), (Without<Player>, Changed<PlayerPosition>)>,
-) {
-    for (player_pos, mut transform) in query.iter_mut() {
-        transform.translation = player_pos.0;
-    }
-}
-
-/// Spawn a visual for every *other* player the server replicates to us. Our own
-/// replicated entity (matching `LocalCharacter`) is skipped, since the local
-/// predicted `Player` already represents us.
+/// Spawn a visible sprite for every *other* player the server replicates to us.
+/// Our own replicated entity (matching LocalCharacter) is skipped.
 fn spawn_remote_players(
     mut commands: Commands,
     query: Query<(Entity, &CharacterId), (Added<CharacterId>, Without<Player>)>,
     local: Res<LocalCharacter>,
-    asset_server: Res<AssetServer>,
 ) {
-    let player_scene = asset_server.load("player.glb#Scene0");
-
     for (entity, char_id) in query.iter() {
         if char_id.0 == local.id {
-            // This is our own server-side entity; don't render a duplicate.
             continue;
         }
-        commands
-            .entity(entity)
-            .insert(Transform::from_xyz(0.0, 1.0, 0.0))
-            .with_children(|parent| {
-                parent.spawn((
-                    SceneRoot(player_scene.clone()),
-                    Transform::from_xyz(0.0, PLAYER_MESH_OFFSET_Y, 0.0),
-                ));
-            });
+        commands.entity(entity).insert((
+            AnimatedSprite::new(SpriteKind::Player),
+            // Transform will be set by project_iso in PostUpdate.
+            Transform::default(),
+        ));
     }
 }
 
+/// Move the local player in world space using the fixed isometric basis.
+///
+/// Updates [`PlayerPosition`] directly; [`project_iso`] (PostUpdate) converts
+/// that to the screen-space [`Transform`] for rendering.
 fn move_player(
     action_state: Res<ActionState>,
     settings: Res<Settings>,
     time: Res<Time>,
-    camera_query: Query<&Transform, (With<SceneCamera>, Without<Player>)>,
-    mut player_query: Query<(&mut Transform, &mut MovementState), With<Player>>,
+    mut player_query: Query<(&mut PlayerPosition, &mut MovementState), With<Player>>,
 ) {
-    let Ok(cam_transform) = camera_query.single() else {
-        return;
-    };
-    let Ok((mut player_transform, mut movement)) = player_query.single_mut() else {
-        return;
-    };
+    let Ok((mut player_pos, mut movement)) = player_query.single_mut() else { return };
 
-    let cam_fwd = cam_transform.forward();
-    let cam_right = cam_transform.right();
-    let forward = Vec3::new(cam_fwd.x, 0.0, cam_fwd.z).normalize_or_zero();
-    let right = Vec3::new(cam_right.x, 0.0, cam_right.z).normalize_or_zero();
+    let forward = ISO_FORWARD.normalize_or_zero();
+    let right = ISO_RIGHT.normalize_or_zero();
 
     let axis = action_state.movement_axis();
     let mut direction = forward * axis.y + right * axis.x;
+
     movement.sprinting = action_state.pressed(GameAction::Sprint);
     let speed = if movement.sprinting {
         settings.gameplay.sprint_speed
@@ -219,35 +179,31 @@ fn move_player(
 
     if direction.length_squared() > 0.0 {
         direction = direction.normalize_or_zero();
-        if let Ok(dir) = Dir3::new(direction) {
-            player_transform.translation += dir.as_vec3() * speed * time.delta_secs();
-            player_transform.look_to(dir, Dir3::Y);
-        }
+        player_pos.0 += direction * speed * time.delta_secs();
     }
 }
 
+/// Apply gravity and jump impulse to the player's Y world position.
 fn apply_jump(
     action_state: Res<ActionState>,
     settings: Res<Settings>,
     time: Res<Time>,
-    mut query: Query<(&mut Transform, &mut MovementState), With<Player>>,
+    mut query: Query<(&mut PlayerPosition, &mut MovementState), With<Player>>,
 ) {
-    let Ok((mut transform, mut movement)) = query.single_mut() else {
-        return;
-    };
+    let Ok((mut player_pos, mut movement)) = query.single_mut() else { return };
     let dt = time.delta_secs();
 
-    let grounded = transform.translation.y <= GROUND_Y + f32::EPSILON;
+    let grounded = player_pos.0.y <= GROUND_Y + f32::EPSILON;
 
     if action_state.just_pressed(GameAction::Jump) && grounded {
         movement.velocity_y = settings.gameplay.jump_force;
     }
 
     movement.velocity_y -= settings.gameplay.gravity * dt;
-    transform.translation.y += movement.velocity_y * dt;
+    player_pos.0.y += movement.velocity_y * dt;
 
-    if transform.translation.y < GROUND_Y {
-        transform.translation.y = GROUND_Y;
+    if player_pos.0.y < GROUND_Y {
+        player_pos.0.y = GROUND_Y;
         movement.velocity_y = 0.0;
     }
 }
@@ -257,23 +213,89 @@ fn handle_combat_input(
     time: Res<Time>,
     mut player_q: Query<&mut CombatState, With<Player>>,
 ) {
-    let Ok(mut combat_state) = player_q.single_mut() else {
-        return;
+    let Ok(mut combat) = player_q.single_mut() else { return };
+    if combat.roll_cooldown > 0.0 {
+        combat.roll_cooldown = (combat.roll_cooldown - time.delta_secs()).max(0.0);
+    }
+    let _ = &action_state; // keyed via prediction.rs
+}
+
+/// Tint the local player sprite orange on attack, red on being hit.
+fn update_player_flash(
+    action_state: Res<ActionState>,
+    time: Res<Time>,
+    mut q: Query<(&CharacterStats, &mut PlayerFlash, &mut Sprite), With<Player>>,
+) {
+    let Ok((stats, mut flash, mut sprite)) = q.single_mut() else { return };
+    let dt = time.delta_secs();
+
+    // Detect incoming damage
+    if flash.prev_health > 0.0 && stats.health.current < flash.prev_health - 0.5 {
+        flash.hurt = 0.25;
+    }
+    flash.prev_health = stats.health.current;
+
+    // Detect attack press
+    if action_state.just_pressed(GameAction::Primary) || action_state.just_pressed(GameAction::Secondary) {
+        flash.attack = 0.15;
+    }
+
+    // Tick timers
+    flash.attack = (flash.attack - dt).max(0.0);
+    flash.hurt = (flash.hurt - dt).max(0.0);
+
+    // Apply tint (hurt takes priority)
+    sprite.color = if flash.hurt > 0.0 {
+        let t = flash.hurt / 0.25;
+        Color::srgb(1.0, 0.2 * (1.0 - t), 0.2 * (1.0 - t))
+    } else if flash.attack > 0.0 {
+        let t = flash.attack / 0.15;
+        Color::srgb(1.0, 0.85 - 0.35 * t, 0.5 - 0.5 * t)
+    } else {
+        Color::WHITE
     };
+}
 
-    combat_state.roll_cooldown = (combat_state.roll_cooldown - time.delta_secs()).max(0.0);
+/// Switch music mood based on recent combat activity.
+fn update_combat_mood(
+    time: Res<Time>,
+    mut mood_timer: ResMut<CombatMoodTimer>,
+    flash_q: Query<&PlayerFlash, With<Player>>,
+    mut commands: Commands,
+) {
+    let dt = time.delta_secs();
+    mood_timer.since_hit += dt;
 
-    if action_state.just_pressed(GameAction::Primary) {
-        info!("Primary input fired");
+    if let Ok(flash) = flash_q.single() {
+        if flash.hurt > 0.1 || flash.attack > 0.05 {
+            mood_timer.since_hit = 0.0;
+        }
     }
-    if action_state.just_pressed(GameAction::Secondary) {
-        info!("Secondary input fired");
+
+    if mood_timer.since_hit < 0.1 {
+        commands.trigger(ChangeMood(Mood::Combat));
+    } else if mood_timer.since_hit > 8.0 {
+        commands.trigger(ChangeMood(Mood::Exploration));
     }
-    if action_state.just_pressed(GameAction::Block) {
-        info!("Block input fired");
+}
+
+// ─── Item registry ────────────────────────────────────────────────────────────
+
+fn seed_item_registry(mut registry: ResMut<ItemRegistry>) {
+    let conn = match db::open() {
+        Ok(c) => c,
+        Err(e) => { error!("DB open failed: {e}"); return; }
+    };
+    if let Err(e) = db::init(&conn) {
+        error!("DB init failed: {e}"); return;
     }
-    if action_state.just_pressed(GameAction::Roll) && combat_state.roll_cooldown <= 0.0 {
-        combat_state.roll_cooldown = 0.6;
-        info!("Roll input fired");
+    match db::load_items(&conn) {
+        Ok(rows) => {
+            for (id, name, r, g, b) in rows {
+                registry.register(id, name, Color::srgb(r, g, b));
+            }
+            info!("Loaded {} item types", registry.0.len());
+        }
+        Err(e) => error!("Failed to load items: {e}"),
     }
 }

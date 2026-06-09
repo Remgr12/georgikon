@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Georgikon Launcher
+GenericName=Game Launcher
+Comment=Launch the Georgikon social MMORPG
+Exec=georgikon-launcher
+Icon=georgikon-launcher
+Terminal=false
+Type=Application
+Categories=Game;RolePlaying;
+Keywords=mmorpg;rpg;online;georgikon;
+StartupNotify=true

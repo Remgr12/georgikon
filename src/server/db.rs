@@ -12,7 +12,11 @@ const DB_PATH: &str = "game.db";
 
 pub fn open() -> Result<Connection> {
     let conn = Connection::open(DB_PATH)?;
-    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON;
+         PRAGMA journal_mode = WAL;
+         PRAGMA synchronous = NORMAL;",
+    )?;
     Ok(conn)
 }
 
@@ -153,17 +157,18 @@ pub fn init(conn: &Connection) -> Result<()> {
 
 /// Insert default content rows when their tables are empty.
 fn seed(conn: &Connection) -> Result<()> {
-    if count(conn, "items")? == 0 {
-        conn.execute_batch(
-            "INSERT INTO items VALUES (1, 'Iron Sword',    0.72, 0.72, 0.82);
-             INSERT INTO items VALUES (2, 'Health Potion', 0.90, 0.18, 0.18);
-             INSERT INTO items VALUES (3, 'Mana Potion',   0.20, 0.30, 0.95);
-             INSERT INTO items VALUES (4, 'Gold Coin',     0.95, 0.82, 0.10);
-             INSERT INTO items VALUES (5, 'Magic Staff',   0.62, 0.18, 0.88);
-             INSERT INTO items VALUES (6, 'Wolf Pelt',     0.55, 0.40, 0.28);
-             INSERT INTO items VALUES (7, 'Boar Tusk',     0.92, 0.90, 0.80);",
-        )?;
-    }
+    // INSERT OR IGNORE so we can add new items even to existing databases.
+    conn.execute_batch(
+        "INSERT OR IGNORE INTO items VALUES (1, 'Iron Sword',    0.72, 0.72, 0.82);
+         INSERT OR IGNORE INTO items VALUES (2, 'Health Potion', 0.90, 0.18, 0.18);
+         INSERT OR IGNORE INTO items VALUES (3, 'Mana Potion',   0.20, 0.30, 0.95);
+         INSERT OR IGNORE INTO items VALUES (4, 'Gold Coin',     0.95, 0.82, 0.10);
+         INSERT OR IGNORE INTO items VALUES (5, 'Magic Staff',   0.62, 0.18, 0.88);
+         INSERT OR IGNORE INTO items VALUES (6, 'Wolf Pelt',     0.55, 0.40, 0.28);
+         INSERT OR IGNORE INTO items VALUES (7, 'Boar Tusk',     0.92, 0.90, 0.80);
+         INSERT OR IGNORE INTO items VALUES (8, 'Silver Coin',   0.80, 0.80, 0.80);
+         INSERT OR IGNORE INTO items VALUES (9, 'Healing Herb',  0.18, 0.70, 0.18);",
+    )?;
 
     if count(conn, "spells")? == 0 {
         conn.execute_batch(
@@ -191,18 +196,27 @@ fn seed(conn: &Connection) -> Result<()> {
         )?;
     }
 
-    if count(conn, "quests")? == 0 {
-        conn.execute_batch(
-            "INSERT INTO quests VALUES (1, 'Cull the Wolves',
-                'The wolves north of town grow bold. Thin their numbers.', 4, 50, 100);
-             INSERT INTO quests VALUES (2, 'Boar Hunt',
-                'Gather boar tusks for the alchemist.', 2, 3, 60);",
-        )?;
-        conn.execute_batch(
-            "INSERT INTO quest_objectives VALUES (1, 0, 'kill', 1, 3, 'Slay 3 Wolves');
-             INSERT INTO quest_objectives VALUES (2, 0, 'collect', 7, 2, 'Collect 2 Boar Tusks');",
-        )?;
-    }
+    // INSERT OR IGNORE so new quests appear even in existing databases.
+    conn.execute_batch(
+        "INSERT OR IGNORE INTO quests VALUES (1, 'Cull the Wolves',
+            'The wolves north of town grow bold. Thin their numbers.',
+            4, 50, 100);
+         INSERT OR IGNORE INTO quests VALUES (2, 'Boar Hunt',
+            'Gather boar tusks for the alchemist.',
+            2, 3, 60);
+         INSERT OR IGNORE INTO quests VALUES (3, 'The Pelt Trader',
+            'Elder Savan needs wolf pelts for the coming winter.',
+            8, 3, 80);
+         INSERT OR IGNORE INTO quests VALUES (4, 'Gathering Herbs',
+            'Lira the merchant needs healing herbs — enemies carry them.',
+            9, 5, 120);",
+    )?;
+    conn.execute_batch(
+        "INSERT OR IGNORE INTO quest_objectives VALUES (1, 0, 'kill',    1, 3, 'Slay 3 Wolves');
+         INSERT OR IGNORE INTO quest_objectives VALUES (2, 0, 'collect', 7, 2, 'Collect 2 Boar Tusks');
+         INSERT OR IGNORE INTO quest_objectives VALUES (3, 0, 'collect', 6, 3, 'Collect 3 Wolf Pelts');
+         INSERT OR IGNORE INTO quest_objectives VALUES (4, 0, 'collect', 9, 5, 'Collect 5 Healing Herbs');",
+    )?;
 
     Ok(())
 }
@@ -391,6 +405,15 @@ fn row_to_character(row: &rusqlite::Row) -> Result<CharacterRow> {
             row.get::<_, f64>(9)? as f32,
         ],
     })
+}
+
+/// Persist only the level and xp for a character (fast path for XP awards).
+pub fn save_character_xp(conn: &Connection, char_id: i64, level: i64, xp: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE characters SET level=?2, xp=?3 WHERE id=?1",
+        params![char_id, level, xp],
+    )?;
+    Ok(())
 }
 
 /// Persist a character's mutable fields (position, level, xp, zone).

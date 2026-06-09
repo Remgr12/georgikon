@@ -42,7 +42,7 @@ fn spawn_frames(mut commands: Commands) {
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Px(10.0),
+                top: Val::Px(160.0), // below the stat bar panel
                 left: Val::Px(10.0),
                 padding: UiRect::all(Val::Px(8.0)),
                 ..default()
@@ -54,10 +54,10 @@ fn spawn_frames(mut commands: Commands) {
             p.spawn((
                 Text::new(""),
                 TextFont {
-                    font_size: 15.0,
+                    font_size: 12.0,
                     ..default()
                 },
-                TextColor(Color::WHITE),
+                TextColor(Color::srgb(0.88, 0.92, 0.88)),
                 PartyFrameText,
             ));
         });
@@ -94,21 +94,23 @@ fn render_frames(store: Res<PartyStore>, mut q: Query<&mut Text, With<PartyFrame
     };
     let mut s = String::new();
     if store.state.in_party {
-        s.push_str("=== PARTY ===\n");
+        s.push_str("── PARTY ──────────\n");
         for m in &store.state.members {
-            let leader = if m.char_id == store.state.leader_char_id {
-                "★ "
-            } else {
-                "  "
-            };
+            let leader = if m.char_id == store.state.leader_char_id { "★" } else { " " };
+            let frac = if m.max_health > 0.0 { (m.health / m.max_health).clamp(0.0, 1.0) } else { 1.0 };
+            // 10-segment ASCII health bar
+            let filled = (frac * 10.0).round() as usize;
+            let bar: String = (0..10).map(|i| if i < filled { '█' } else { '░' }).collect();
+            let hp_pct = (frac * 100.0) as u32;
+            let name_trunc = if m.name.len() > 8 { &m.name[..8] } else { &m.name };
             s.push_str(&format!(
-                "{}{} L{}  {:.0}/{:.0}\n",
-                leader, m.name, m.level, m.health, m.max_health
+                "{} {:8} L{:<2} [{}] {}%\n",
+                leader, name_trunc, m.level, bar, hp_pct
             ));
         }
     }
     if let Some((_, name)) = &store.pending_invite {
-        s.push_str(&format!("\n{} invites you — /paccept /pdecline\n", name));
+        s.push_str(&format!("\n● {} invites you\n  /paccept /pdecline\n", name));
     }
     text.0 = s;
 }

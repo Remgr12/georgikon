@@ -387,9 +387,10 @@ impl Plugin for ClientNetworkPlugin {
 fn client_setup(mut commands: Commands) {
     let server_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 5000));
     let client_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
+    let client_id: u64 = rand::random();
     let auth = lightyear::prelude::Authentication::Manual {
         server_addr,
-        client_id: 1,
+        client_id,
         private_key: [0; 32],
         protocol_id: 1,
     };

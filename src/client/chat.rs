@@ -1,7 +1,12 @@
 use crate::client::commands::CommandQueue;
 use crate::client::input::{ActionState, GameAction};
+use crate::client::sprite::SpeechBubble;
+use crate::common::mob::UnitVisual;
 use crate::common::social::{ChatBroadcastMessage, ChatChannel, ChatNetMessage};
-use crate::net::ReliableChannel;
+use crate::net::{CharacterName, PlayerPosition, ReliableChannel};
+use bevy::ecs::message::MessageReader;
+use bevy::input::ButtonState;
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use lightyear::prelude::*;
 use lightyear::prelude::client::Client;
@@ -84,9 +89,14 @@ fn setup_chat_ui(mut commands: Commands) {
 }
 
 /// Display incoming broadcast messages from the server.
+/// For Local channel messages, also spawn a speech bubble above the sender.
 fn receive_chat_broadcast(
+    mut commands: Commands,
     mut client_query: Query<&mut MessageReceiver<ChatBroadcastMessage>, With<Client>>,
     mut history_query: Query<&mut Text, With<ChatHistoryText>>,
+    // Entities with a known name for speech bubble anchoring
+    named_q: Query<(Entity, &CharacterName, &PlayerPosition)>,
+    visual_q: Query<(Entity, &UnitVisual, &PlayerPosition)>,
 ) {
     let Ok(mut receiver) = client_query.single_mut() else {
         return;
@@ -100,6 +110,33 @@ fn receive_chat_broadcast(
             format!("[{}] {}: {}", msg.channel.tag(), msg.sender_name, msg.body)
         };
         new_lines.push(line);
+
+        // Spawn speech bubble above the sender for Local channel
+        if msg.channel == ChatChannel::Local {
+            let sender = msg.sender_name.as_str();
+            // Try CharacterName first (remote players)
+            let anchor = named_q.iter()
+                .find(|(_, n, _)| n.0.as_str() == sender)
+                .map(|(e, _, _)| e)
+                .or_else(|| visual_q.iter()
+                    .find(|(_, v, _)| v.name.as_str() == sender)
+                    .map(|(e, _, _)| e));
+
+            if let Some(target) = anchor {
+                let display = if msg.body.len() > 40 {
+                    format!("{}…", &msg.body[..40])
+                } else {
+                    msg.body.clone()
+                };
+                commands.spawn((
+                    SpeechBubble { target, timer: 5.0 },
+                    Text2d::new(display),
+                    TextFont { font_size: 10.0, ..default() },
+                    TextColor(Color::srgba(1.0, 1.0, 1.0, 1.0)),
+                    Transform::default(),
+                ));
+            }
+        }
     }
 
     if new_lines.is_empty() {
@@ -111,10 +148,10 @@ fn receive_chat_broadcast(
             text.0.push_str(line);
             text.0.push('\n');
         }
-        // Keep at most 15 lines.
+        // Keep at most 20 lines.
         let lines: Vec<String> = text.0.lines().map(|l| l.to_string()).collect();
-        if lines.len() > 15 {
-            text.0 = lines[lines.len() - 15..].join("\n") + "\n";
+        if lines.len() > 20 {
+            text.0 = lines[lines.len() - 20..].join("\n") + "\n";
         }
     }
 }
@@ -122,7 +159,7 @@ fn receive_chat_broadcast(
 fn handle_chat_input(
     mut state: ResMut<ChatState>,
     actions: Res<ActionState>,
-    keys: Res<ButtonInput<KeyCode>>,
+    mut key_events: MessageReader<KeyboardInput>,
     mut input_query: Query<&mut Text, (With<ChatInputText>, Without<ChatHistoryText>)>,
     mut history_query: Query<&mut Text, (With<ChatHistoryText>, Without<ChatInputText>)>,
     mut client_query: Query<&mut MessageSender<ChatNetMessage>, With<Client>>,
@@ -137,7 +174,6 @@ fn handle_chat_input(
             if !state.current_message.is_empty() {
                 let raw = state.current_message.clone();
                 if raw.starts_with('/') && !is_chat_prefix(&raw) {
-                    // Non-chat slash command → dispatch via the command queue.
                     command_queue.lines.push(raw.trim_start_matches('/').to_string());
                     state.history.push(raw);
                 } else {
@@ -186,33 +222,38 @@ fn handle_chat_input(
         }
     }
 
-    if state.is_typing && actions.just_pressed(GameAction::ChatBackspace) {
-        state.current_message.pop();
-        update_ui = true;
-    }
-
+    // Character input via keyboard events (supports unicode + key repeat for backspace)
     if state.is_typing {
-        for key in keys.get_just_pressed() {
-            if let Some(c) = key_to_char(*key) {
-                state.current_message.push(c);
-                update_ui = true;
-            } else if *key == KeyCode::Space {
-                state.current_message.push(' ');
-                update_ui = true;
-            } else if *key == KeyCode::Slash {
-                state.current_message.push('/');
-                update_ui = true;
-            } else if *key == KeyCode::Minus {
-                state.current_message.push('-');
-                update_ui = true;
-            } else if *key == KeyCode::Period {
-                state.current_message.push('.');
-                update_ui = true;
-            } else if *key == KeyCode::Comma {
-                state.current_message.push(',');
-                update_ui = true;
+        for ev in key_events.read() {
+            if ev.state != ButtonState::Pressed { continue; }
+            match &ev.logical_key {
+                Key::Backspace => {
+                    state.current_message.pop();
+                    update_ui = true;
+                }
+                _ => {
+                    let chars: Vec<char> = if let Some(text) = &ev.text {
+                        text.chars().filter(|c| !c.is_control()).collect()
+                    } else {
+                        match &ev.logical_key {
+                            Key::Character(s) => s.chars().filter(|c| !c.is_control()).collect(),
+                            _ => vec![],
+                        }
+                    };
+                    if !chars.is_empty() {
+                        for c in chars {
+                            if state.current_message.len() < 256 {
+                                state.current_message.push(c);
+                            }
+                        }
+                        update_ui = true;
+                    }
+                }
             }
         }
+    } else {
+        // Drain events to keep the reader fresh even when not typing
+        for _ in key_events.read() {}
     }
 
     if let Some(parsed) = send_msg {
@@ -327,53 +368,22 @@ fn parse_chat_command(input: &str, current: ChatChannel) -> ParsedChat {
     }
 
     if input.trim() == "/help" {
-        return ParsedChat::new(
-            current,
-            "Channels: /local /party /world /trade /g1 /g2  •  /w <name> <msg>",
+        return ParsedChat::new(current,
+            "=== GEORGIKON HELP ===\n\
+             Movement: WASD  Jump: Space  Sprint: Shift\n\
+             Attack: Z (primary)  X (secondary)  Q (roll)\n\
+             Camera: V (cycle)  C/F (zoom)  M (minimap)\n\
+             Social: G (guild)  L (quests)  O (mail)  Esc (pause)\n\
+             Interact: E (near NPCs)\n\
+             Guild: /gcreate <n> /ginvite <n> /gaccept /gleave /glist /visit /home\n\
+             Party: /pinvite <n> /paccept /pdecline /pleave\n\
+             Quest: /qaccept <id> /qturnin <id> /qabandon <id>\n\
+             Mail: /mailbox /mail <n> <msg> /mailread <id>\n\
+             Trade: /tradewith <n> /offer <id> <qty> /tradeok /tradeno\n\
+             Chat: /local /party /world /trade /g1 /g2 /w <name> <msg>",
         );
     }
 
     ParsedChat::new(current, input.trim())
 }
 
-fn key_to_char(key: KeyCode) -> Option<char> {
-    match key {
-        KeyCode::KeyA => Some('a'),
-        KeyCode::KeyB => Some('b'),
-        KeyCode::KeyC => Some('c'),
-        KeyCode::KeyD => Some('d'),
-        KeyCode::KeyE => Some('e'),
-        KeyCode::KeyF => Some('f'),
-        KeyCode::KeyG => Some('g'),
-        KeyCode::KeyH => Some('h'),
-        KeyCode::KeyI => Some('i'),
-        KeyCode::KeyJ => Some('j'),
-        KeyCode::KeyK => Some('k'),
-        KeyCode::KeyL => Some('l'),
-        KeyCode::KeyM => Some('m'),
-        KeyCode::KeyN => Some('n'),
-        KeyCode::KeyO => Some('o'),
-        KeyCode::KeyP => Some('p'),
-        KeyCode::KeyQ => Some('q'),
-        KeyCode::KeyR => Some('r'),
-        KeyCode::KeyS => Some('s'),
-        KeyCode::KeyT => Some('t'),
-        KeyCode::KeyU => Some('u'),
-        KeyCode::KeyV => Some('v'),
-        KeyCode::KeyW => Some('w'),
-        KeyCode::KeyX => Some('x'),
-        KeyCode::KeyY => Some('y'),
-        KeyCode::KeyZ => Some('z'),
-        KeyCode::Digit0 => Some('0'),
-        KeyCode::Digit1 => Some('1'),
-        KeyCode::Digit2 => Some('2'),
-        KeyCode::Digit3 => Some('3'),
-        KeyCode::Digit4 => Some('4'),
-        KeyCode::Digit5 => Some('5'),
-        KeyCode::Digit6 => Some('6'),
-        KeyCode::Digit7 => Some('7'),
-        KeyCode::Digit8 => Some('8'),
-        KeyCode::Digit9 => Some('9'),
-        _ => None,
-    }
-}

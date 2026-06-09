@@ -33,6 +33,7 @@ const MELEE_RANGE: f32 = 3.0;
 const MELEE_DAMAGE: f32 = 30.0;
 const TARGET_WOLVES: usize = 4;
 const TARGET_BOARS: usize = 3;
+const TARGET_ELITE_WOLVES: usize = 1;
 
 #[derive(Component)]
 struct Mob {
@@ -60,12 +61,9 @@ impl Plugin for MobServerPlugin {
 }
 
 fn spawn_initial_mobs(mut commands: Commands) {
-    for _ in 0..TARGET_WOLVES {
-        spawn_mob(&mut commands, UnitKind::Wolf);
-    }
-    for _ in 0..TARGET_BOARS {
-        spawn_mob(&mut commands, UnitKind::Boar);
-    }
+    for _ in 0..TARGET_WOLVES { spawn_mob(&mut commands, UnitKind::Wolf); }
+    for _ in 0..TARGET_BOARS { spawn_mob(&mut commands, UnitKind::Boar); }
+    for _ in 0..TARGET_ELITE_WOLVES { spawn_mob(&mut commands, UnitKind::EliteWolf); }
 }
 
 fn maintain_population(
@@ -74,23 +72,19 @@ fn maintain_population(
     mut commands: Commands,
     mobs: Query<&Mob>,
 ) {
-    if !timer.0.tick(time.delta()).just_finished() {
-        return;
-    }
-    let (mut wolves, mut boars) = (0, 0);
+    if !timer.0.tick(time.delta()).just_finished() { return; }
+    let (mut wolves, mut boars, mut elites) = (0, 0, 0);
     for m in mobs.iter() {
         match m.kind {
             UnitKind::Wolf => wolves += 1,
             UnitKind::Boar => boars += 1,
+            UnitKind::EliteWolf => elites += 1,
             UnitKind::Player => {}
         }
     }
-    for _ in wolves..TARGET_WOLVES {
-        spawn_mob(&mut commands, UnitKind::Wolf);
-    }
-    for _ in boars..TARGET_BOARS {
-        spawn_mob(&mut commands, UnitKind::Boar);
-    }
+    for _ in wolves..TARGET_WOLVES { spawn_mob(&mut commands, UnitKind::Wolf); }
+    for _ in boars..TARGET_BOARS { spawn_mob(&mut commands, UnitKind::Boar); }
+    for _ in elites..TARGET_ELITE_WOLVES { spawn_mob(&mut commands, UnitKind::EliteWolf); }
 }
 
 fn spawn_mob(commands: &mut Commands, kind: UnitKind) {
@@ -100,9 +94,10 @@ fn spawn_mob(commands: &mut Commands, kind: UnitKind) {
         rand::random::<f32>() * 80.0 - 40.0,
     );
     let (max_health, level, damage, speed, aggro) = match kind {
-        UnitKind::Wolf => (60.0, 2, 8.0, 3.5, 18.0),
-        UnitKind::Boar => (90.0, 3, 12.0, 2.5, 14.0),
-        UnitKind::Player => (100.0, 1, 0.0, 0.0, 0.0),
+        UnitKind::Wolf      => (60.0,  2, 8.0,  3.5, 18.0),
+        UnitKind::Boar      => (90.0,  3, 12.0, 2.5, 14.0),
+        UnitKind::EliteWolf => (200.0, 6, 18.0, 4.0, 24.0),
+        UnitKind::Player    => (100.0, 1, 0.0,  0.0, 0.0),
     };
     let mut stats = CharacterStats::default();
     stats.health.max = max_health;
@@ -248,9 +243,10 @@ fn on_melee_attack(
 
 fn xp_for(kind: UnitKind) -> u64 {
     match kind {
-        UnitKind::Wolf => 30,
-        UnitKind::Boar => 50,
-        UnitKind::Player => 0,
+        UnitKind::Wolf      => 30,
+        UnitKind::Boar      => 50,
+        UnitKind::EliteWolf => 150,
+        UnitKind::Player    => 0,
     }
 }
 
@@ -259,15 +255,19 @@ fn loot_for(kind: UnitKind) -> Vec<(u32, u32)> {
     match kind {
         UnitKind::Wolf => {
             loot.push((6, 1)); // Wolf Pelt
-            if rand::random::<f32>() < 0.4 {
-                loot.push((4, 1)); // Gold Coin
-            }
+            if rand::random::<f32>() < 0.4 { loot.push((4, 1)); }  // Gold Coin
+            if rand::random::<f32>() < 0.3 { loot.push((9, 1)); }  // Healing Herb
         }
         UnitKind::Boar => {
             loot.push((7, 1)); // Boar Tusk
-            if rand::random::<f32>() < 0.5 {
-                loot.push((4, 2));
-            }
+            if rand::random::<f32>() < 0.5 { loot.push((4, 2)); }  // Gold Coins
+            if rand::random::<f32>() < 0.4 { loot.push((9, 1)); }  // Healing Herb
+        }
+        UnitKind::EliteWolf => {
+            loot.push((6, 3)); // 3× Wolf Pelts
+            loot.push((8, 2)); // Silver Coins
+            loot.push((4, 5)); // Gold Coins
+            if rand::random::<f32>() < 0.3 { loot.push((5, 1)); }  // rare: Magic Staff
         }
         UnitKind::Player => {}
     }

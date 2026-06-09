@@ -1,0 +1,57 @@
+# Maintainer: Zsombor Simon <zsombor@remgr.dev>
+pkgname=georgikon-launcher-git
+pkgver=r1.0000000
+pkgrel=1
+pkgdesc="Launcher for the Georgikon social MMORPG"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Remgr12/georgikon"
+license=('GPL-3.0-or-later')
+depends=('gcc-libs' 'glib2' 'libxkbcommon')
+makedepends=('cargo' 'git' 'pkg-config')
+optdepends=('georgikon: the game itself')
+provides=('georgikon-launcher')
+conflicts=('georgikon-launcher')
+source=("$pkgname::git+https://github.com/Remgr12/georgikon.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$pkgname"
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+    cd "$pkgname/launcher"
+    cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+}
+
+build() {
+    cd "$pkgname/launcher"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build \
+        --frozen \
+        --release \
+        --target "$CARCH-unknown-linux-gnu"
+}
+
+check() {
+    cd "$pkgname/launcher"
+    cargo test --frozen --release --target "$CARCH-unknown-linux-gnu"
+}
+
+package() {
+    cd "$pkgname/launcher"
+    local target="$CARCH-unknown-linux-gnu"
+
+    install -Dm755 "target/$target/release/georgikon-launcher" \
+        "$pkgdir/usr/bin/georgikon-launcher"
+
+    install -Dm644 "packaging/linux/georgikon-launcher.desktop" \
+        "$pkgdir/usr/share/applications/georgikon-launcher.desktop"
+
+    # Install icon if one exists
+    if [[ -f "packaging/linux/georgikon-launcher.png" ]]; then
+        install -Dm644 "packaging/linux/georgikon-launcher.png" \
+            "$pkgdir/usr/share/pixmaps/georgikon-launcher.png"
+    fi
+}
